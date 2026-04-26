@@ -3,7 +3,7 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # System deps for OCR and PDF parsing
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
     tesseract-ocr-chi-sim \
     tesseract-ocr-chi-tra \

@@ -17,16 +17,9 @@ passlib[bcrypt]==1.7.4
 redis==5.1.1
 celery==5.4.0
 
-# LLM
-litellm==1.49.0
-anthropic==0.34.2
-openai==1.51.0
-
-# AI / Embedding
-langchain==0.3.3
-langchain-anthropic==0.2.4
-sentence-transformers==3.2.0
-pgvector==0.3.5
+# LLM calls use a lightweight OpenAI-compatible HTTP adapter in app/llm/provider.py.
+# Keep heavyweight SDKs/embedding stacks out of the production image so Railway's
+# image size stays under the free-tier limit.
 
 # Document Parsing
 pymupdf==1.24.11
