@@ -7,6 +7,7 @@ from httpx import ASGITransport, AsyncClient
 from app.database import engine
 from app.llm.provider import LLMService
 from app.main import app
+from app.routers import orgs as org_router
 
 
 @pytest_asyncio.fixture
@@ -32,6 +33,33 @@ async def _register_and_auth(client: AsyncClient) -> dict[str, str]:
         "password": password,
     })
     return {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+
+@pytest.mark.asyncio
+async def test_org_settings_return_effective_model_config(client, monkeypatch):
+    headers = await _register_and_auth(client)
+
+    class FakeLLMService:
+        provider = "system-provider"
+        model = "system-model"
+        base_url = "https://system.example/v1"
+        api_key = "system-api-key"
+
+    monkeypatch.setattr(org_router, "LLMService", FakeLLMService)
+
+    settings = await client.get("/api/v1/orgs/me/settings", headers=headers)
+
+    assert settings.status_code == 200
+    body = settings.json()
+    assert body["llm_provider"] == "system-provider"
+    assert body["llm_model"] == "system-model"
+    assert body["llm_base_url"] == "https://system.example/v1"
+    assert body["api_key_configured"] is False
+    assert body["effective_api_key_configured"] is True
+    assert body["uses_org_provider"] is False
+    assert body["uses_org_model"] is False
+    assert body["uses_org_base_url"] is False
+    assert body["uses_org_api_key"] is False
 
 
 @pytest.mark.asyncio

@@ -21,7 +21,7 @@
 | 层次 | 技术 |
 |------|------|
 | 后端 | Python 3.11 + FastAPI + Celery |
-| 数据库 | PostgreSQL 16 + pgvector |
+| 数据库 | PostgreSQL 16 |
 | 缓存/队列 | Redis 7 |
 | 对象存储 | MinIO（本地）/ Cloudflare R2（云端） |
 | LLM | MiniMax / OpenAI Compatible / Claude / Gemini / Ollama（可切换） |
@@ -208,11 +208,9 @@ docker compose exec postgres psql -U postgres -d immigration_db
 ## 运行测试
 
 ```bash
-# 在容器内运行所有测试
-docker compose exec api pytest tests/ -v
-
 # 本地运行
 cd backend
+pip install -r requirements-dev.txt
 pytest tests/ -v --tb=short
 ```
 
@@ -280,7 +278,8 @@ imigrationAplication/
 │   │   └── workers/            # Celery 异步任务
 │   ├── migrations/             # Alembic 数据库迁移
 │   ├── tests/                  # 测试文件
-│   └── requirements.txt
+│   ├── requirements.txt         # 运行时依赖
+│   └── requirements-dev.txt     # 本地测试依赖
 ├── frontend/                   # React 前端
 ├── docs/                       # 使用说明和部署方案
 ├── deploy/                     # 生产反向代理配置

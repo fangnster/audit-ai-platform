@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { Settings, User, Globe, Bell, Shield, Save, Bot, Building2, Phone, Palette, Sun, Moon, CheckCircle2, AlertCircle } from 'lucide-react'
+import { Settings, User, Globe, Shield, Save, Bot, Building2, Phone, Palette, Sun, Moon, CheckCircle2, AlertCircle } from 'lucide-react'
 import { useAuthStore } from '../store/auth'
 import { authApi, orgApi } from '../api'
 import { readableLlmError } from '../utils/llmError'
@@ -13,7 +13,7 @@ export default function SettingsPage() {
   const { t, i18n } = useTranslation()
   const { user, setUser } = useAuthStore()
   const queryClient = useQueryClient()
-  const [activeTab, setActiveTab] = useState<'profile' | 'language' | 'appearance' | 'model' | 'notifications' | 'security'>('profile')
+  const [activeTab, setActiveTab] = useState<'profile' | 'language' | 'appearance' | 'model' | 'security'>('profile')
   const [theme, setTheme] = useState<'light' | 'dark'>(() =>
     localStorage.getItem('ui-theme') === 'dark' ? 'dark' : 'light'
   )
@@ -57,15 +57,22 @@ export default function SettingsPage() {
     ? (i18n.language === 'zh'
         ? '必填。请输入供应商或网关的 OpenAI-compatible /v1 地址。'
         : 'Required. Enter the provider or gateway OpenAI-compatible /v1 URL.')
-    : (i18n.language === 'zh'
-        ? '保存后，测试生成会使用已保存的地址。'
-        : 'Generation tests use the saved URL after you save.')
+    : baseUrlChanged
+      ? (i18n.language === 'zh'
+          ? '地址已修改。保存后，测试生成和后台任务才会使用新地址。'
+          : 'URL changed. Save before generation tests and background tasks use it.')
+      : (i18n.language === 'zh'
+          ? '当前显示的是程序实际使用的生效地址。'
+          : 'This is the effective URL the app is currently using.')
   const apiKeySaved = Boolean(orgSettings.api_key_configured)
+  const effectiveApiKeyConfigured = Boolean(orgSettings.effective_api_key_configured)
   const apiKeyStatus = hasTypedApiKey
     ? (i18n.language === 'zh' ? '新 API Key 待保存' : 'New API key pending save')
     : apiKeySaved
-      ? (i18n.language === 'zh' ? '已保存 API Key' : 'API key saved')
-      : (i18n.language === 'zh' ? '未保存 API Key' : 'No API key saved')
+      ? (i18n.language === 'zh' ? '已保存组织 API Key' : 'Organization API key saved')
+      : effectiveApiKeyConfigured
+        ? (i18n.language === 'zh' ? '正在使用系统环境 API Key' : 'Using system environment API key')
+        : (i18n.language === 'zh' ? '未配置 API Key' : 'No API key configured')
   const apiKeyHelp = hasTypedApiKey
     ? (i18n.language === 'zh'
         ? '将保存为新的 API Key；保存后不会在页面回显。'
@@ -74,13 +81,17 @@ export default function SettingsPage() {
       ? (i18n.language === 'zh'
           ? '已保存 API Key。留空保存不会覆盖；输入新 Key 才会替换。'
           : 'API key saved. Leaving this blank keeps it; enter a new key to replace it.')
-      : isLocalProvider
+      : effectiveApiKeyConfigured
         ? (i18n.language === 'zh'
-            ? '本地或 Ollama 通常可留空；如网关要求鉴权请填写。'
-            : 'Local or Ollama setups can usually leave this blank; fill it if your gateway requires auth.')
-        : (i18n.language === 'zh'
-            ? '未保存 API Key；如果网关需要鉴权，请填写后保存。'
-            : 'No API key saved; fill this if your gateway requires auth.')
+            ? '当前由后端环境变量提供；输入新 Key 并保存后，会改用组织级配置。'
+            : 'Provided by backend environment variables. Enter and save a new key to use an organization-level key.')
+        : isLocalProvider
+          ? (i18n.language === 'zh'
+              ? '本地或 Ollama 通常可留空；如网关要求鉴权请填写。'
+              : 'Local or Ollama setups can usually leave this blank; fill it if your gateway requires auth.')
+          : (i18n.language === 'zh'
+              ? '未配置 API Key；如果网关需要鉴权，请填写后保存。'
+              : 'No API key configured; fill this if your gateway requires auth.')
   const passwordMismatch = newPasswordConfirm.length > 0 && newPassword !== newPasswordConfirm
   const canChangePassword = Boolean(currentPassword && newPassword.length >= 8 && newPassword === newPasswordConfirm)
 
@@ -182,7 +193,6 @@ export default function SettingsPage() {
     { key: 'language' as const,      icon: Globe,  label: t('languageSettings') },
     { key: 'appearance' as const,    icon: Palette,label: i18n.language === 'zh' ? '外观' : 'Appearance' },
     { key: 'model' as const,         icon: Bot,    label: t('modelSettings') },
-    { key: 'notifications' as const, icon: Bell,   label: t('notifications') },
     { key: 'security' as const,      icon: Shield, label: t('security') },
   ]
 
@@ -441,7 +451,7 @@ export default function SettingsPage() {
                     autoComplete="new-password"
                   />
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
-                    <span style={{ fontWeight: 600, color: apiKeySaved || hasTypedApiKey ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
+                    <span style={{ fontWeight: 600, color: effectiveApiKeyConfigured || hasTypedApiKey ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
                       {apiKeyStatus}.
                     </span>{' '}
                     {apiKeyHelp}
@@ -498,53 +508,6 @@ export default function SettingsPage() {
                     </div>
                   </div>
                 )}
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'notifications' && (
-            <div>
-              <h2 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: 20 }}>{t('notifications')}</h2>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 500 }}>
-                {[
-                  { label: 'AI 文案生成完成', desc: '当 Agent 完成自定义文案生成时通知', default: true },
-                  { label: i18n.language === 'zh' ? '文件更新' : 'File updates', desc: i18n.language === 'zh' ? '当新文档上传或任务完成时通知' : 'Notify when files are uploaded or tasks are completed', default: true },
-                  { label: i18n.language === 'zh' ? '事实库更新' : 'Fact updates', desc: i18n.language === 'zh' ? '当 AI 提取新事实或事实状态变化时通知' : 'Notify when facts are extracted or updated', default: true },
-                  { label: '补件提醒 (RFI)', desc: '当移民局发出补件请求时紧急通知', default: true },
-                  { label: '系统维护公告', desc: '平台升级和维护通知', default: false },
-                ].map((item, idx) => (
-                  <div key={idx} style={{
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                    padding: '14px 16px',
-                    borderRadius: 'var(--radius-sm)',
-                    background: 'var(--glass)',
-                    border: '1px solid var(--border)',
-                  }}>
-                    <div>
-                      <div style={{ fontWeight: 500, fontSize: '0.9rem' }}>{item.label}</div>
-                      <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: 2 }}>{item.desc}</div>
-                    </div>
-                    <label style={{ position: 'relative', width: 44, height: 24, cursor: 'pointer' }}>
-                      <input type="checkbox" defaultChecked={item.default} style={{ display: 'none' }}
-                        onChange={() => toast.success(t('settingsSaved'))} />
-                      <span style={{
-                        position: 'absolute', inset: 0,
-                        borderRadius: 12,
-                        background: item.default ? 'var(--accent-primary)' : 'var(--bg-700)',
-                        transition: 'all 0.3s',
-                      }} />
-                      <span style={{
-                        position: 'absolute',
-                        top: 2, left: item.default ? 22 : 2,
-                        width: 20, height: 20,
-                        borderRadius: '50%',
-                        background: '#fff',
-                        transition: 'all 0.3s',
-                        boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
-                      }} />
-                    </label>
-                  </div>
-                ))}
               </div>
             </div>
           )}

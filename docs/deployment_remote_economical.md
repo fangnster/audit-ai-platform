@@ -18,7 +18,7 @@
 - Caddy：HTTPS、反向代理、前端静态文件
 - FastAPI：后端 API
 - Celery Worker：Agent 异步任务
-- PostgreSQL + pgvector：数据库
+- PostgreSQL：数据库
 - Redis：队列和缓存
 - MinIO：对象存储
 - 外部 LLM API：MiniMax / OpenAI Compatible / Claude / Gemini / Ollama 网关

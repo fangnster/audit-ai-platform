@@ -48,7 +48,7 @@ services:
     command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
 
   postgres:
-    image: pgvector/pgvector:pg16
+    image: postgres:16-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres

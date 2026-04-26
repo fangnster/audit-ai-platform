@@ -46,12 +46,24 @@ class UpdateOrgSettingsRequest(BaseModel):
 
 
 def _public_settings(org_settings: dict | None) -> dict:
-    org_settings = org_settings or {}
+    saved = org_settings or {}
+    service = LLMService()
+    provider = (saved.get("llm_provider") or service.provider or "openai").strip()
+    model = (saved.get("llm_model") or service.model or "").strip()
+    base_url = (saved.get("llm_base_url") or service.base_url or "https://api.openai.com/v1").strip().rstrip("/")
+    saved_api_key = (saved.get("api_key") or "").strip()
+    effective_api_key = (saved_api_key or service.api_key or "").strip()
+
     return {
-        "llm_provider": org_settings.get("llm_provider"),
-        "llm_model": org_settings.get("llm_model"),
-        "llm_base_url": org_settings.get("llm_base_url"),
-        "api_key_configured": bool((org_settings.get("api_key") or "").strip()),
+        "llm_provider": provider,
+        "llm_model": model,
+        "llm_base_url": base_url,
+        "api_key_configured": bool(saved_api_key),
+        "effective_api_key_configured": bool(effective_api_key),
+        "uses_org_provider": bool((saved.get("llm_provider") or "").strip()),
+        "uses_org_model": bool((saved.get("llm_model") or "").strip()),
+        "uses_org_base_url": bool((saved.get("llm_base_url") or "").strip()),
+        "uses_org_api_key": bool(saved_api_key),
     }
 
 
@@ -74,25 +86,6 @@ def _validate_test_config(base_url: str) -> None:
             status_code=422,
             detail="Base URL must start with http:// or https://",
         )
-
-
-def _saved_llm_settings_for_test(org_settings: dict | None, *, require_model: bool = False) -> dict:
-    saved = dict(org_settings or {})
-    provider = (saved.get("llm_provider") or "").strip()
-    base_url = (saved.get("llm_base_url") or "").strip()
-    model = (saved.get("llm_model") or "").strip()
-    api_key = (saved.get("api_key") or "").strip()
-
-    if not provider:
-        raise HTTPException(status_code=422, detail="LLM provider must be saved before testing")
-    if not base_url:
-        raise HTTPException(status_code=422, detail="LLM base URL must be saved before testing")
-    if require_model and not model:
-        raise HTTPException(status_code=422, detail="LLM model must be saved before generation testing")
-    if not api_key and provider.lower() not in {"ollama", "local"}:
-        raise HTTPException(status_code=422, detail="LLM API key must be saved before testing")
-
-    return saved
 
 
 @router.post("", response_model=OrgResponse, status_code=201)
@@ -166,7 +159,7 @@ async def test_my_org_llm_generation(_body: UpdateOrgSettingsRequest, current_us
     if not org:
         raise HTTPException(status_code=404, detail="No organization found")
 
-    candidate_settings = _saved_llm_settings_for_test(org.settings, require_model=True)
+    candidate_settings = dict(org.settings or {})
     service = LLMService()
     probe_text = f"model-test-{uuid.uuid4().hex[:8]}"
     try:
