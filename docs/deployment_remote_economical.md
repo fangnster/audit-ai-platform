@@ -283,7 +283,13 @@ CACHE_ENABLED=true
 Source: GitHub repo
 Root Directory: 留空
 Builder: Dockerfile
-Start Command: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+Start Command: 留空，使用 Dockerfile 的 CMD
+```
+
+如果必须手动填写 Start Command，不要直接写 `--port $PORT`。Railway 可能会把 `$PORT` 原样传给 `uvicorn`，导致 `'$PORT' is not a valid integer`。改用：
+
+```bash
+sh -c "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"
 ```
 
 第二个 Service：`worker`
