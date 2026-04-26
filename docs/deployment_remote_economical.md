@@ -281,7 +281,7 @@ CACHE_ENABLED=true
 
 ```text
 Source: GitHub repo
-Root Directory: backend
+Root Directory: 留空
 Builder: Dockerfile
 Start Command: uvicorn app.main:app --host 0.0.0.0 --port $PORT
 ```
@@ -290,7 +290,7 @@ Start Command: uvicorn app.main:app --host 0.0.0.0 --port $PORT
 
 ```text
 Source: 同一个 GitHub repo
-Root Directory: backend
+Root Directory: 留空
 Builder: Dockerfile
 Start Command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
 ```
