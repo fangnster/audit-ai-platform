@@ -28,7 +28,7 @@ class Organization(Base):
     slug: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     # settings: {default_llm, api_keys(encrypted), token_quota, fallback_model, llm_configs}
     settings: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=True)
-    plan: Mapped[OrgPlan] = mapped_column(Enum(OrgPlan), default=OrgPlan.free, nullable=True)
+    plan: Mapped[OrgPlan] = mapped_column(Enum(OrgPlan, native_enum=False), default=OrgPlan.free, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=True)
 
     members: Mapped[list["OrgMember"]] = relationship("OrgMember", back_populates="organization")
@@ -61,7 +61,7 @@ class OrgMember(Base):
     org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     team_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("teams.id", ondelete="SET NULL"), nullable=True)
-    role: Mapped[MemberRole] = mapped_column(Enum(MemberRole), nullable=False)
+    role: Mapped[MemberRole] = mapped_column(Enum(MemberRole, native_enum=False), nullable=False)
     permissions: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=True)
     joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=True)
 

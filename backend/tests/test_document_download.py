@@ -53,6 +53,7 @@ async def test_uploaded_document_download_returns_original_bytes():
                 "email": email,
                 "name": "Download Tester",
                 "password": password,
+                "password_confirm": password,
                 "org_name": "Download Test Law Group",
             })
             login = await client.post("/api/v1/auth/login", data={"username": email, "password": password})
@@ -108,6 +109,7 @@ async def test_document_parse_reports_llm_failure(monkeypatch):
                 "email": email,
                 "name": "Parse Failure Tester",
                 "password": password,
+                "password_confirm": password,
                 "org_name": "Parse Failure Law Group",
             })
             login = await client.post("/api/v1/auth/login", data={"username": email, "password": password})

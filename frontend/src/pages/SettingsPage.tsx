@@ -22,6 +22,9 @@ export default function SettingsPage() {
   const [name, setName] = useState(user?.name ?? '')
   const [email] = useState(user?.email ?? '')
   const [phone, setPhone] = useState(savedPhone)
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [newPasswordConfirm, setNewPasswordConfirm] = useState('')
   const { data: orgData } = useQuery({
     queryKey: ['org-me'],
     queryFn: () => orgApi.me(),
@@ -78,6 +81,8 @@ export default function SettingsPage() {
         : (i18n.language === 'zh'
             ? '未保存 API Key；如果网关需要鉴权，请填写后保存。'
             : 'No API key saved; fill this if your gateway requires auth.')
+  const passwordMismatch = newPasswordConfirm.length > 0 && newPassword !== newPasswordConfirm
+  const canChangePassword = Boolean(currentPassword && newPassword.length >= 8 && newPassword === newPasswordConfirm)
 
   useEffect(() => {
     if (!orgSettingsData?.data) return
@@ -106,6 +111,21 @@ export default function SettingsPage() {
       toast.success(t('settingsSaved'))
     },
     onError: (err: any) => toast.error(err?.response?.data?.detail || t('updateFailed')),
+  })
+
+  const changePasswordMutation = useMutation({
+    mutationFn: () => authApi.changePassword({
+      current_password: currentPassword,
+      new_password: newPassword,
+      new_password_confirm: newPasswordConfirm,
+    }),
+    onSuccess: () => {
+      setCurrentPassword('')
+      setNewPassword('')
+      setNewPasswordConfirm('')
+      toast.success(i18n.language === 'zh' ? '密码已更新' : 'Password updated')
+    },
+    onError: (err: any) => toast.error(err?.response?.data?.detail || (i18n.language === 'zh' ? '密码更新失败' : 'Password update failed')),
   })
 
   const modelPayload = () => ({
@@ -168,6 +188,18 @@ export default function SettingsPage() {
 
   const handleSave = () => {
     saveProfileMutation.mutate()
+  }
+
+  const handleChangePassword = () => {
+    if (newPassword.length < 8) {
+      toast.error(i18n.language === 'zh' ? '新密码至少需要 8 位' : 'New password must be at least 8 characters')
+      return
+    }
+    if (newPassword !== newPasswordConfirm) {
+      toast.error(i18n.language === 'zh' ? '两次输入的新密码不一致' : 'The two new passwords do not match')
+      return
+    }
+    changePasswordMutation.mutate()
   }
 
   const handleTestSavedGeneration = () => {
@@ -522,19 +554,57 @@ export default function SettingsPage() {
               <h2 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: 20 }}>{t('security')}</h2>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 480 }}>
                 <div className="form-group">
-                  <label className="form-label">当前密码</label>
-                  <input className="form-input" type="password" placeholder="输入当前密码" />
+                  <label className="form-label">{i18n.language === 'zh' ? '当前密码' : 'Current password'}</label>
+                  <input
+                    className="form-input"
+                    type="password"
+                    value={currentPassword}
+                    onChange={e => setCurrentPassword(e.target.value)}
+                    placeholder={i18n.language === 'zh' ? '输入当前密码' : 'Enter current password'}
+                    autoComplete="current-password"
+                  />
                 </div>
                 <div className="form-group">
-                  <label className="form-label">新密码</label>
-                  <input className="form-input" type="password" placeholder="输入新密码 (至少8位)" />
+                  <label className="form-label">{i18n.language === 'zh' ? '新密码' : 'New password'}</label>
+                  <input
+                    className="form-input"
+                    type="password"
+                    value={newPassword}
+                    onChange={e => setNewPassword(e.target.value)}
+                    placeholder={i18n.language === 'zh' ? '输入新密码（至少 8 位）' : 'Enter new password (at least 8 characters)'}
+                    autoComplete="new-password"
+                    minLength={8}
+                  />
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 4 }}>
+                    {i18n.language === 'zh' ? '新密码至少 8 位' : 'Use at least 8 characters'}
+                  </span>
                 </div>
                 <div className="form-group">
-                  <label className="form-label">确认新密码</label>
-                  <input className="form-input" type="password" placeholder="再次输入新密码" />
+                  <label className="form-label">{i18n.language === 'zh' ? '确认新密码' : 'Confirm new password'}</label>
+                  <input
+                    className="form-input"
+                    type="password"
+                    value={newPasswordConfirm}
+                    onChange={e => setNewPasswordConfirm(e.target.value)}
+                    placeholder={i18n.language === 'zh' ? '再次输入新密码' : 'Enter new password again'}
+                    autoComplete="new-password"
+                    minLength={8}
+                    style={{ borderColor: passwordMismatch ? 'var(--error)' : undefined }}
+                  />
+                  {passwordMismatch && (
+                    <span style={{ fontSize: '0.75rem', color: 'var(--error)', marginTop: 4 }}>
+                      {i18n.language === 'zh' ? '两次输入的新密码不一致' : 'The two new passwords do not match'}
+                    </span>
+                  )}
                 </div>
-                <button className="btn btn-primary" style={{ alignSelf: 'flex-start', marginTop: 8 }} onClick={handleSave}>
-                  <Shield size={14} /> 更新密码
+                <button
+                  className="btn btn-primary"
+                  style={{ alignSelf: 'flex-start', marginTop: 8 }}
+                  onClick={handleChangePassword}
+                  disabled={!canChangePassword || changePasswordMutation.isPending}
+                >
+                  {changePasswordMutation.isPending ? <span className="spinner" /> : <Shield size={14} />}
+                  {i18n.language === 'zh' ? '更新密码' : 'Update password'}
                 </button>
 
                 <div style={{ marginTop: 24, padding: 20, borderRadius: 'var(--radius)', background: 'rgba(234,179,8,0.08)', border: '1px solid rgba(234,179,8,0.2)' }}>

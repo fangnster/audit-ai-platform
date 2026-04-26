@@ -11,22 +11,26 @@ export default function RegisterPage() {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [passwordConfirm, setPasswordConfirm] = useState('')
   const [orgName, setOrgName] = useState('')
   const [loading, setLoading] = useState(false)
 
   const nameRef = useRef<HTMLInputElement>(null)
   const emailRef = useRef<HTMLInputElement>(null)
   const passwordRef = useRef<HTMLInputElement>(null)
+  const passwordConfirmRef = useRef<HTMLInputElement>(null)
   const orgRef = useRef<HTMLInputElement>(null)
+  const passwordsMismatch = passwordConfirm.length > 0 && password !== passwordConfirm
+  const canRegister = Boolean(orgName.trim() && password.length >= 8 && password === passwordConfirm)
 
   // Clear all fields on mount (defeat browser autofill)
   useEffect(() => {
-    setName(''); setEmail(''); setPassword(''); setOrgName('')
+    setName(''); setEmail(''); setPassword(''); setPasswordConfirm(''); setOrgName('')
     const timer = setTimeout(() => {
-      ;[nameRef, emailRef, passwordRef, orgRef].forEach(ref => {
+      ;[nameRef, emailRef, passwordRef, passwordConfirmRef, orgRef].forEach(ref => {
         if (ref.current) ref.current.value = ''
       })
-      setName(''); setEmail(''); setPassword(''); setOrgName('')
+      setName(''); setEmail(''); setPassword(''); setPasswordConfirm(''); setOrgName('')
     }, 100)
     return () => clearTimeout(timer)
   }, [])
@@ -37,9 +41,17 @@ export default function RegisterPage() {
       toast.error('请填写律所或公司名称')
       return
     }
+    if (password.length < 8) {
+      toast.error('密码至少需要 8 位')
+      return
+    }
+    if (password !== passwordConfirm) {
+      toast.error('两次输入的密码不一致')
+      return
+    }
     setLoading(true)
     try {
-      await authApi.register(email, name, password, orgName)
+      await authApi.register(email, name, password, passwordConfirm, orgName)
       toast.success('注册成功，请登录')
       navigate('/login')
     } catch {
@@ -88,10 +100,37 @@ export default function RegisterPage() {
             <label className="form-label">{t('password')}</label>
             <div style={{ position: 'relative' }}>
               <Lock size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-              <input ref={passwordRef} className="form-input" style={{ paddingLeft: 38 }} type="password" name="reg-pw" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" required minLength={6} />
+              <input ref={passwordRef} className="form-input" style={{ paddingLeft: 38 }} type="password" name="reg-pw" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" required minLength={8} />
             </div>
+            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: 4 }}>
+              密码至少 8 位
+            </span>
           </div>
-          <button className="btn btn-primary" type="submit" disabled={loading || !orgName.trim()} style={{ marginTop: 8, justifyContent: 'center' }}>
+          <div className="form-group">
+            <label className="form-label">确认密码</label>
+            <div style={{ position: 'relative' }}>
+              <Lock size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+              <input
+                ref={passwordConfirmRef}
+                className="form-input"
+                style={{ paddingLeft: 38, borderColor: passwordsMismatch ? 'var(--error)' : undefined }}
+                type="password"
+                name="reg-pw-confirm"
+                autoComplete="new-password"
+                value={passwordConfirm}
+                onChange={(e) => setPasswordConfirm(e.target.value)}
+                placeholder="再次输入密码"
+                required
+                minLength={8}
+              />
+            </div>
+            {passwordsMismatch && (
+              <span style={{ fontSize: '0.72rem', color: 'var(--error)', marginTop: 4 }}>
+                两次输入的密码不一致
+              </span>
+            )}
+          </div>
+          <button className="btn btn-primary" type="submit" disabled={loading || !canRegister} style={{ marginTop: 8, justifyContent: 'center' }}>
             {loading ? <span className="spinner" /> : t('register')}
           </button>
           <p style={{ textAlign: 'center', fontSize: '0.875rem', color: 'var(--text-muted)' }}>

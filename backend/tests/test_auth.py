@@ -30,6 +30,7 @@ async def test_register_and_login(client):
         "email": email,
         "name": "Test User",
         "password": "password123",
+        "password_confirm": "password123",
         "org_name": "Test Law Group",
     })
     assert r.status_code == 201
@@ -57,6 +58,51 @@ async def test_register_and_login(client):
     assert profile.json()["name"] == "Test Lawyer"
     assert profile.json()["profile"]["phone"] == "+1 555 123 4567"
 
+    mismatch = await client.patch(
+        "/api/v1/auth/me/password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "current_password": "password123",
+            "new_password": "new-password-123",
+            "new_password_confirm": "new-password-456",
+        },
+    )
+    assert mismatch.status_code == 422
+
+    wrong_current = await client.patch(
+        "/api/v1/auth/me/password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "current_password": "wrong-password",
+            "new_password": "new-password-123",
+            "new_password_confirm": "new-password-123",
+        },
+    )
+    assert wrong_current.status_code == 400
+
+    password_update = await client.patch(
+        "/api/v1/auth/me/password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "current_password": "password123",
+            "new_password": "new-password-123",
+            "new_password_confirm": "new-password-123",
+        },
+    )
+    assert password_update.status_code == 200
+
+    old_login = await client.post("/api/v1/auth/login", data={
+        "username": email,
+        "password": "password123",
+    })
+    assert old_login.status_code == 401
+
+    new_login = await client.post("/api/v1/auth/login", data={
+        "username": email,
+        "password": "new-password-123",
+    })
+    assert new_login.status_code == 200
+
 
 @pytest.mark.asyncio
 async def test_case_requires_contact_and_status_can_update(client):
@@ -67,6 +113,7 @@ async def test_case_requires_contact_and_status_can_update(client):
         "email": email,
         "name": "Case Tester",
         "password": password,
+        "password_confirm": password,
         "org_name": "Case Test Law Group",
     })
     assert r.status_code == 201
@@ -127,6 +174,7 @@ async def test_case_resources_require_case_membership(client):
         "email": owner_email,
         "name": "Owner Lawyer",
         "password": password,
+        "password_confirm": password,
         "org_name": "Owner Law Group",
     })
     owner_login = await client.post("/api/v1/auth/login", data={"username": owner_email, "password": password})
@@ -144,6 +192,7 @@ async def test_case_resources_require_case_membership(client):
         "email": intruder_email,
         "name": "Other Lawyer",
         "password": password,
+        "password_confirm": password,
         "org_name": "Other Law Group",
     })
     intruder_login = await client.post("/api/v1/auth/login", data={"username": intruder_email, "password": password})

@@ -24,6 +24,7 @@ async def _register_and_auth(client: AsyncClient) -> dict[str, str]:
         "email": email,
         "name": "Org Settings Tester",
         "password": password,
+        "password_confirm": password,
         "org_name": "Org Settings Law Group",
     })
     login = await client.post("/api/v1/auth/login", data={

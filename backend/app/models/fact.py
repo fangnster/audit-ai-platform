@@ -30,7 +30,7 @@ class Fact(Base):
     category: Mapped[str] = mapped_column(String(100), nullable=False)   # education|employment|award|publication|patent|media
     content: Mapped[str] = mapped_column(Text, nullable=False)
     structured_data: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=True)   # parsed key-value pairs
-    status: Mapped[FactStatus] = mapped_column(Enum(FactStatus), default=FactStatus.extracted, nullable=True)
+    status: Mapped[FactStatus] = mapped_column(Enum(FactStatus, native_enum=False), default=FactStatus.extracted, nullable=True)
     confidence_score: Mapped[float] = mapped_column(Float, default=1.0, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=True)

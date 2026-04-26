@@ -37,7 +37,7 @@ class AgentTask(Base):
     task_type: Mapped[str] = mapped_column(String(50), nullable=False)
     input_params: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=True)
     output_result: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=True)
-    status: Mapped[AgentTaskStatus] = mapped_column(Enum(AgentTaskStatus), default=AgentTaskStatus.queued, nullable=True)
+    status: Mapped[AgentTaskStatus] = mapped_column(Enum(AgentTaskStatus, native_enum=False), default=AgentTaskStatus.queued, nullable=True)
     priority: Mapped[int] = mapped_column(Integer, default=3, nullable=True)     # 0=highest (P0 fact fix)
     llm_model: Mapped[str] = mapped_column(String(100), default="claude", nullable=True)
     token_usage: Mapped[int] = mapped_column(Integer, default=0, nullable=True)

@@ -4,7 +4,7 @@ from typing import Optional, Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
-from pydantic import BaseModel, EmailStr, model_validator
+from pydantic import BaseModel, EmailStr, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,13 +20,16 @@ router = APIRouter()
 class RegisterRequest(BaseModel):
     email: EmailStr
     name: str
-    password: str
+    password: str = Field(min_length=8)
+    password_confirm: str = Field(min_length=8)
     org_name: str
 
     @model_validator(mode="after")
-    def require_org_name(self):
+    def validate_registration(self):
         if not self.org_name.strip():
             raise ValueError("请填写律所/公司名称")
+        if self.password != self.password_confirm:
+            raise ValueError("两次输入的密码不一致")
         return self
 
 
@@ -50,6 +53,18 @@ class UpdateMeRequest(BaseModel):
     phone: Optional[str] = None
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8)
+    new_password_confirm: str = Field(min_length=8)
+
+    @model_validator(mode="after")
+    def validate_new_password(self):
+        if self.new_password != self.new_password_confirm:
+            raise ValueError("两次输入的新密码不一致")
+        return self
+
+
 @router.post("/register", response_model=UserResponse, status_code=201)
 async def register(body: RegisterRequest, db: Annotated[AsyncSession, Depends(get_db)]):
     result = await db.execute(select(User).where(User.email == body.email))
@@ -60,6 +75,7 @@ async def register(body: RegisterRequest, db: Annotated[AsyncSession, Depends(ge
         email=body.email,
         name=body.name,
         password_hash=hash_password(body.password),
+        profile={},
     )
     db.add(user)
     await db.flush()
@@ -98,6 +114,20 @@ async def login(
 @router.get("/me", response_model=UserResponse)
 async def me(current_user: CurrentUser):
     return current_user
+
+
+@router.patch("/me/password")
+async def change_password(
+    body: ChangePasswordRequest,
+    current_user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    if not verify_password(body.current_password, current_user.password_hash):
+        raise HTTPException(status_code=400, detail="当前密码不正确")
+
+    current_user.password_hash = hash_password(body.new_password)
+    await db.commit()
+    return {"message": "密码已更新"}
 
 
 @router.patch("/me", response_model=UserResponse)

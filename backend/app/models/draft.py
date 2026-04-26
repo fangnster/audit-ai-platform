@@ -50,7 +50,7 @@ class DraftSection(Base):
     section_title: Mapped[str] = mapped_column(String(500), nullable=False)
     content: Mapped[str] = mapped_column(Text, default="", nullable=True)
     criterion: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # criterion_1|criterion_2|criterion_3
-    status: Mapped[SectionStatus] = mapped_column(Enum(SectionStatus), default=SectionStatus.draft, nullable=True)
+    status: Mapped[SectionStatus] = mapped_column(Enum(SectionStatus, native_enum=False), default=SectionStatus.draft, nullable=True)
     pending_slots: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=True)   # {slot_id: {label, filled_content}}
     version: Mapped[str] = mapped_column(String(10), default="main", nullable=True)
     is_deleted: Mapped[bool] = mapped_column(default=False)
