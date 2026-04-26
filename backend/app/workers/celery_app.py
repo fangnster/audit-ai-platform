@@ -1,13 +1,37 @@
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
 from celery import Celery
 from app.config import settings
 from app.logging_config import configure_logging
 
 configure_logging()
 
+
+def _with_celery_rediss_ssl(url: str) -> str:
+    """Celery/Kombu requires ssl_cert_reqs to be explicit for rediss URLs."""
+    if not url.lower().startswith("rediss://"):
+        return url
+
+    parsed = urlsplit(url)
+    query = parse_qsl(parsed.query, keep_blank_values=True)
+    if not any(key.lower() == "ssl_cert_reqs" for key, _ in query):
+        query.append(("ssl_cert_reqs", "CERT_REQUIRED"))
+    return urlunsplit((
+        parsed.scheme,
+        parsed.netloc,
+        parsed.path,
+        urlencode(query),
+        parsed.fragment,
+    ))
+
+
+broker_url = _with_celery_rediss_ssl(settings.CELERY_BROKER_URL)
+result_backend = _with_celery_rediss_ssl(settings.CELERY_RESULT_BACKEND)
+
 celery_app = Celery(
     "immigration_ai",
-    broker=settings.CELERY_BROKER_URL,
-    backend=settings.CELERY_RESULT_BACKEND,
+    broker=broker_url,
+    backend=result_backend,
     include=[
         "app.workers.document_tasks",
         "app.workers.agent_tasks",

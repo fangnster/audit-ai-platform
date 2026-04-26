@@ -265,13 +265,13 @@ STORAGE_PUBLIC_URL=
 用 Upstash Redis 创建一个数据库，复制 `rediss://...` 连接串：
 
 ```env
-REDIS_URL=rediss://default:PASSWORD@HOST:PORT/0
-CELERY_BROKER_URL=rediss://default:PASSWORD@HOST:PORT/1
-CELERY_RESULT_BACKEND=rediss://default:PASSWORD@HOST:PORT/2
+REDIS_URL=rediss://default:PASSWORD@HOST:PORT
+CELERY_BROKER_URL=rediss://default:PASSWORD@HOST:PORT
+CELERY_RESULT_BACKEND=rediss://default:PASSWORD@HOST:PORT
 CACHE_ENABLED=true
 ```
 
-如果 Celery 连接 Upstash 出现兼容问题，就把 API、Worker、Redis 放回同一个 VPS；这是排障成本最低的回退方案。
+不要手动把 Upstash 地址改成 `/1`、`/2`。Upstash 免费库通常只有一个逻辑库，项目代码会在 Celery 使用 `rediss://` 时自动补齐 SSL 参数。
 
 ### 4. 部署 API 和 Worker 到 Railway
 
@@ -416,8 +416,8 @@ CORS_ORIGINS=["https://app.yourdomain.com"]
 DATABASE_URL=postgresql+asyncpg://USER:PASSWORD@HOST/DB?ssl=require
 
 REDIS_URL=rediss://default:PASSWORD@HOST:PORT
-CELERY_BROKER_URL=rediss://default:PASSWORD@HOST:PORT/1
-CELERY_RESULT_BACKEND=rediss://default:PASSWORD@HOST:PORT/2
+CELERY_BROKER_URL=rediss://default:PASSWORD@HOST:PORT
+CELERY_RESULT_BACKEND=rediss://default:PASSWORD@HOST:PORT
 
 STORAGE_ENDPOINT_URL=https://<account_id>.r2.cloudflarestorage.com
 STORAGE_ACCESS_KEY=R2_ACCESS_KEY
