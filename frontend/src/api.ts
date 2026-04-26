@@ -1,12 +1,7 @@
 import axios from 'axios'
 import { useAuthStore } from './store/auth'
 
-const defaultApiBaseURL =
-  typeof window !== 'undefined' && window.location.hostname.endsWith('.vercel.app')
-    ? 'https://api-production-7601.up.railway.app/api/v1'
-    : '/api/v1'
-
-const apiBaseURL = import.meta.env.VITE_API_BASE_URL?.trim() || defaultApiBaseURL
+const apiBaseURL = import.meta.env.VITE_API_BASE_URL?.trim() || '/api/v1'
 
 export const api = axios.create({
   baseURL: apiBaseURL,

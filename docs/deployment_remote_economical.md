@@ -363,19 +363,25 @@ Output Directory: dist
 Install Command: npm ci
 ```
 
-在 Vercel 环境变量里设置：
+使用本项目当前的 Vercel + Railway 方案时，推荐不要在 Vercel 里设置 `VITE_API_BASE_URL`。前端默认只请求同域名下的 `/api/v1`，再由 `frontend/vercel.json` 在 Vercel 内部代理到 Railway：
+
+```text
+https://immigration-ai-platform.vercel.app/api/v1/* -> Railway API
+```
+
+这样浏览器地址栏和前端请求都停留在 Vercel 域名内，正式访问统一使用：
+
+```text
+https://immigration-ai-platform.vercel.app/cases
+```
+
+前端已包含 `frontend/vercel.json`，同时用于让 React Router 的深链接刷新时回到 `index.html`，避免 `/cases/...` 这类页面在 Vercel 上刷新 404。
+
+只有在你后续绑定了独立 API 域名，且不想走 Vercel 内部代理时，才需要设置：
 
 ```env
 VITE_API_BASE_URL=https://api.yourdomain.com/api/v1
 ```
-
-如果暂时没有独立 API 域名，也可以填容器平台给你的 API 地址，例如：
-
-```env
-VITE_API_BASE_URL=https://your-api.up.railway.app/api/v1
-```
-
-前端已包含 `frontend/vercel.json`，用于让 React Router 的深链接刷新时回到 `index.html`，避免 `/cases/...` 这类页面在 Vercel 上刷新 404。
 
 ### 6. 绑定域名
 
