@@ -1,0 +1,699 @@
+"""
+Celery tasks: AI agent orchestration.
+- generate_drafts: custom legal draft generation
+- rewrite_section: section-level rewrite with Redis locking
+- fix_fact: P0 priority fact correction after fact confirmation
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import time
+import uuid
+
+import redis
+
+from app.workers.celery_app import celery_app
+from app.config import settings
+from app.llm.provider import strip_think_tags
+
+logger = logging.getLogger(__name__)
+redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
+
+SECTION_LOCK_TTL = 120  # seconds
+
+
+def _run_async(coro):
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+def _get_db_session():
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    sync_url = settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+    engine = create_engine(sync_url)
+    return engine, Session(engine)
+
+
+def _mark_processing(agent_task) -> None:
+    from app.models.agent_task import AgentTaskStatus
+
+    if agent_task:
+        agent_task.status = AgentTaskStatus.processing
+        agent_task.error_message = None
+
+
+def _mark_completed(agent_task, output_result: dict, started_at: float) -> None:
+    from app.models.agent_task import AgentTaskStatus
+
+    if agent_task:
+        agent_task.status = AgentTaskStatus.completed
+        agent_task.output_result = output_result
+        agent_task.latency_ms = int((time.perf_counter() - started_at) * 1000)
+        agent_task.error_message = None
+
+
+def _record_agent_task_error(agent_task_id: str, exc: Exception, started_at: float, *, final: bool) -> None:
+    from app.models.agent_task import AgentTask, AgentTaskStatus
+
+    engine, session = _get_db_session()
+    try:
+        with session:
+            agent_task = session.get(AgentTask, uuid.UUID(agent_task_id))
+            if not agent_task:
+                return
+            agent_task.status = AgentTaskStatus.failed if final else AgentTaskStatus.queued
+            agent_task.error_message = str(exc)[:1000]
+            agent_task.latency_ms = int((time.perf_counter() - started_at) * 1000)
+            session.commit()
+    finally:
+        engine.dispose()
+
+
+def _invalidate_case_runtime_cache(case_id: str) -> None:
+    from app.services.cache import delete_pattern_sync
+
+    delete_pattern_sync(f"drafts:{case_id}:*")
+    delete_pattern_sync(f"facts:{case_id}:*")
+    delete_pattern_sync(f"tasks:{case_id}:*")
+    delete_pattern_sync(f"documents:{case_id}:*")
+
+
+def _fact_to_prompt_dict(fact) -> dict:
+    return {
+        "id": str(fact.id),
+        "source_document_id": str(fact.source_document_id) if fact.source_document_id else None,
+        "category": fact.category,
+        "content": fact.content,
+        "structured_data": fact.structured_data or {},
+        "confidence_score": fact.confidence_score,
+    }
+
+
+def _draft_history_refs(session, case_uuid: uuid.UUID, exclude_section_id: uuid.UUID | None = None) -> list[dict]:
+    """Collect recent same-case draft history as generation guidance."""
+    from app.models.draft import DraftRevision, DraftSection
+    from sqlalchemy import select
+
+    section_query = (
+        select(DraftSection)
+        .where(DraftSection.case_id == case_uuid, DraftSection.is_deleted == False)
+        .order_by(DraftSection.updated_at.desc())
+        .limit(4)
+    )
+    if exclude_section_id:
+        section_query = section_query.where(DraftSection.id != exclude_section_id)
+
+    refs: list[dict] = []
+    for section in session.execute(section_query).scalars().all():
+        refs.append({
+            "title": f"当前历史文案：{section.section_title}",
+            "type": "draft_history",
+            "content": section.content,
+        })
+
+    revision_query = (
+        select(DraftRevision)
+        .where(DraftRevision.case_id == case_uuid)
+        .order_by(DraftRevision.created_at.desc())
+        .limit(4)
+    )
+    if exclude_section_id:
+        revision_query = revision_query.where(DraftRevision.section_id != exclude_section_id)
+
+    for revision in session.execute(revision_query).scalars().all():
+        refs.append({
+            "title": f"历史版本 #{revision.revision_number}：{revision.section_title}",
+            "type": "draft_history",
+            "content": revision.content_snapshot,
+        })
+
+    return refs[:6]
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    name="app.workers.agent_tasks.generate_drafts",
+)
+def generate_drafts(self, case_id: str, agent_task_id: str):
+    """
+    Generate one strategy-driven, lawyer-customized draft for a case.
+    Reads selected facts, prompt, and knowledge from DB, then writes one full DraftSection.
+    """
+    from app.models.fact import Fact, FactStatus
+    from app.models.draft import DraftRevision, DraftSection, SectionStatus
+    from app.models.agent_task import AgentTask, AgentTaskStatus
+    from app.models.case import Case
+    from app.models.organization import Organization
+    from app.models.knowledge import KnowledgeItem
+    from app.agents.draft_generator import DraftGenerationAgent
+    from app.llm.provider import LLMService
+    from sqlalchemy import select
+
+    started_at = time.perf_counter()
+    logger.info("agent_task_start type=generate_drafts task_id=%s case_id=%s", agent_task_id, case_id)
+    engine, session = _get_db_session()
+    try:
+        with session:
+            # Update task status
+            agent_task = session.get(AgentTask, uuid.UUID(agent_task_id))
+            _mark_processing(agent_task)
+            session.commit()
+
+            case = session.get(Case, uuid.UUID(case_id))
+            if not case:
+                if agent_task:
+                    _mark_completed(agent_task, {"error": "case not found"}, started_at)
+                    session.commit()
+                return {"error": "case not found"}
+
+            # Read prompt, knowledge_ids, fact_ids from agent_task input_params
+            input_params = (agent_task.input_params or {}) if agent_task else {}
+            draft_title = input_params.get("title", "")
+            user_prompt = input_params.get("prompt", "")
+            strategy = input_params.get("strategy", "strongest_first")
+            knowledge_ids = input_params.get("knowledge_ids", [])
+            fact_ids = input_params.get("fact_ids", [])
+
+            # Fetch facts: specific IDs if provided, otherwise approved facts with a non-deleted fallback.
+            if fact_ids:
+                facts_result = session.execute(
+                    select(Fact).where(
+                        Fact.case_id == uuid.UUID(case_id),
+                        Fact.id.in_([uuid.UUID(fid) for fid in fact_ids]),
+                        Fact.is_deleted == False,
+                    )
+                )
+            else:
+                facts_result = session.execute(
+                    select(Fact).where(
+                        Fact.case_id == uuid.UUID(case_id),
+                        Fact.status == FactStatus.lawyer_approved,
+                        Fact.is_deleted == False,
+                    )
+                )
+                facts = facts_result.scalars().all()
+                if not facts:
+                    facts_result = session.execute(
+                        select(Fact).where(
+                            Fact.case_id == uuid.UUID(case_id),
+                            Fact.is_deleted == False,
+                        )
+                    )
+                    facts = facts_result.scalars().all()
+                facts = [_fact_to_prompt_dict(f) for f in facts]
+            if fact_ids:
+                facts = [_fact_to_prompt_dict(f) for f in facts_result.scalars().all()]
+
+            if not facts:
+                if agent_task:
+                    _mark_completed(agent_task, {"error": "no facts", "case_id": case_id}, started_at)
+                    session.commit()
+                return {"error": "no facts", "case_id": case_id}
+
+            # Fetch knowledge items if specified
+            knowledge_content = []
+            if knowledge_ids:
+                ki_result = session.execute(
+                    select(KnowledgeItem).where(KnowledgeItem.id.in_([uuid.UUID(k) for k in knowledge_ids]))
+                )
+                for ki in ki_result.scalars().all():
+                    knowledge_content.append({
+                        "title": ki.title,
+                        "type": ki.item_type,
+                        "content": ki.content,
+                    })
+            # Historical full drafts are intentionally not injected automatically.
+            # Older same-case drafts can carry a filing-letter structure that overrides
+            # the lawyer's current custom format request. Lawyers can still select
+            # knowledge-base templates explicitly when they want a prior structure.
+            history_refs: list[dict] = []
+
+            org = session.get(Organization, case.org_id)
+            org_settings = org.settings if org and org.settings else {}
+
+            # Generate one main draft with lawyer-selected strategy.
+            agent = DraftGenerationAgent(llm=LLMService(
+                provider=org_settings.get("llm_provider"),
+                api_key=org_settings.get("api_key"),
+                base_url=org_settings.get("llm_base_url"),
+                model=org_settings.get("llm_model"),
+            ))
+            content = _run_async(agent.generate_draft(
+                facts=facts,
+                case_type=case.case_type.value if hasattr(case.case_type, 'value') else str(case.case_type),
+                draft_title=draft_title,
+                user_prompt=user_prompt,
+                strategy=strategy,
+                knowledge_refs=knowledge_content,
+            ))
+            drafts = {"main": content}
+
+            # Persist each version as one full draft instead of splitting it into paragraph/section cards.
+            for version, content in drafts.items():
+                title, body = _full_draft_from_content(content, draft_title=draft_title)
+                section = DraftSection(
+                    case_id=uuid.UUID(case_id),
+                    section_order=1,
+                    section_title=title,
+                    content=body,
+                    version=version,
+                    status=SectionStatus.draft,
+                )
+                session.add(section)
+                session.flush()
+                session.add(DraftRevision(
+                    section_id=section.id,
+                    case_id=section.case_id,
+                    revision_number=1,
+                    section_title=section.section_title,
+                    content_snapshot=section.content,
+                    editor_role="agent",
+                    editor_id=None,
+                    change_summary="Initial AI generation",
+                    revision_metadata={"agent_task_id": agent_task_id, "history_ref_count": len(history_refs)},
+                ))
+
+            # Mark agent task complete
+            _mark_completed(
+                agent_task,
+                {
+                    "versions": list(drafts.keys()),
+                    "fact_count": len(facts),
+                    "history_ref_count": len(history_refs),
+                },
+                started_at,
+            )
+            session.commit()
+            _invalidate_case_runtime_cache(case_id)
+            logger.info("agent_task_done type=generate_drafts task_id=%s case_id=%s fact_count=%s", agent_task_id, case_id, len(facts))
+
+            return {"case_id": case_id, "versions": list(drafts.keys()), "fact_count": len(facts)}
+
+    except Exception as exc:
+        final = self.request.retries >= self.max_retries
+        _record_agent_task_error(agent_task_id, exc, started_at, final=final)
+        logger.exception("agent_task_error type=generate_drafts task_id=%s case_id=%s final=%s", agent_task_id, case_id, final)
+        raise self.retry(exc=exc)
+    finally:
+        engine.dispose()
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=3,
+    name="app.workers.agent_tasks.rewrite_section",
+)
+def rewrite_section(self, section_id: str, instruction: str, case_id: str, agent_task_id: str):
+    """
+    Rewrite a single draft section using a Redis distributed lock.
+    Implements segment-level concurrency control.
+    """
+    from app.models.draft import DraftRevision, DraftSection, SectionStatus
+    from app.models.agent_task import AgentTask, AgentTaskStatus
+    from app.models.fact import Fact, FactStatus
+    from app.models.case import Case
+    from app.models.organization import Organization
+    from app.models.knowledge import KnowledgeItem
+    from app.agents.draft_generator import DraftGenerationAgent
+    from app.llm.provider import LLMService
+    from sqlalchemy import select
+
+    lock_key = f"section:{case_id}:{section_id}:lock"
+
+    # Acquire distributed lock
+    acquired = redis_client.set(lock_key, agent_task_id, nx=True, ex=SECTION_LOCK_TTL)
+    if not acquired:
+        # Another task holds the lock — retry after 5s
+        raise self.retry(countdown=5, max_retries=12)
+
+    started_at = time.perf_counter()
+    logger.info("agent_task_start type=rewrite_section task_id=%s case_id=%s section_id=%s", agent_task_id, case_id, section_id)
+    engine, session = _get_db_session()
+    try:
+        with session:
+            agent_task = session.get(AgentTask, uuid.UUID(agent_task_id))
+            _mark_processing(agent_task)
+            session.commit()
+
+            section = session.get(DraftSection, uuid.UUID(section_id))
+            if not section:
+                if agent_task:
+                    _mark_completed(agent_task, {"error": "section not found", "section_id": section_id}, started_at)
+                    session.commit()
+                return {"error": "section not found"}
+
+            input_params = (agent_task.input_params or {}) if agent_task else {}
+            fact_ids = input_params.get("fact_ids", [])
+            knowledge_ids = input_params.get("knowledge_ids", [])
+            strategy = input_params.get("strategy", "strongest_first")
+
+            if fact_ids:
+                facts_result = session.execute(
+                    select(Fact).where(
+                        Fact.case_id == uuid.UUID(case_id),
+                        Fact.id.in_([uuid.UUID(fid) for fid in fact_ids]),
+                        Fact.is_deleted == False,
+                    )
+                )
+                fact_rows = facts_result.scalars().all()
+            else:
+                facts_result = session.execute(
+                    select(Fact).where(
+                        Fact.case_id == uuid.UUID(case_id),
+                        Fact.status == FactStatus.lawyer_approved,
+                        Fact.is_deleted == False,
+                    ).limit(20)
+                )
+                fact_rows = facts_result.scalars().all()
+                if not fact_rows:
+                    facts_result = session.execute(
+                        select(Fact).where(
+                            Fact.case_id == uuid.UUID(case_id),
+                            Fact.is_deleted == False,
+                        ).limit(20)
+                    )
+                    fact_rows = facts_result.scalars().all()
+
+            facts = [_fact_to_prompt_dict(f) for f in fact_rows]
+
+            knowledge_content = []
+            if knowledge_ids:
+                ki_result = session.execute(
+                    select(KnowledgeItem).where(KnowledgeItem.id.in_([uuid.UUID(k) for k in knowledge_ids]))
+                )
+                for ki in ki_result.scalars().all():
+                    knowledge_content.append({
+                        "title": ki.title,
+                        "type": ki.item_type,
+                        "content": ki.content,
+                    })
+            # Do not automatically inject unrelated historical drafts into rewrites;
+            # the current section plus explicit knowledge selections are enough context.
+            history_refs: list[dict] = []
+
+            case = session.get(Case, uuid.UUID(case_id))
+            org = session.get(Organization, case.org_id) if case else None
+            org_settings = org.settings if org and org.settings else {}
+
+            # Rewrite via agent
+            agent = DraftGenerationAgent(llm=LLMService(
+                provider=org_settings.get("llm_provider"),
+                api_key=org_settings.get("api_key"),
+                base_url=org_settings.get("llm_base_url"),
+                model=org_settings.get("llm_model"),
+            ))
+            new_content = _run_async(agent.rewrite_section(
+                original_content=section.content,
+                instruction=instruction,
+                relevant_facts=facts,
+                strategy=strategy,
+                knowledge_refs=knowledge_content,
+            ))
+
+            old_content = section.content
+            revision_result = session.execute(
+                select(DraftRevision.revision_number)
+                .where(DraftRevision.section_id == section.id)
+                .order_by(DraftRevision.revision_number.desc())
+                .limit(1)
+            )
+            last_revision_number = revision_result.scalar_one_or_none() or 0
+            session.add(DraftRevision(
+                section_id=section.id,
+                case_id=section.case_id,
+                revision_number=last_revision_number + 1,
+                section_title=section.section_title,
+                content_snapshot=old_content,
+                editor_role="agent",
+                editor_id=None,
+                change_summary=f"Agent rewrite: {instruction[:100]}",
+                revision_metadata={"agent_task_id": agent_task_id},
+            ))
+            section.content = new_content
+            section.status = SectionStatus.draft
+
+            _mark_completed(
+                agent_task,
+                {
+                    "section_id": section_id,
+                    "instruction": instruction,
+                    "strategy": strategy,
+                    "history_ref_count": len(history_refs),
+                },
+                started_at,
+            )
+
+            session.commit()
+            _invalidate_case_runtime_cache(case_id)
+
+            # Notify via Redis pub/sub for WebSocket push
+            redis_client.publish(
+                f"case:{case_id}:updates",
+                json.dumps({
+                    "type": "section_updated",
+                    "section_id": section_id,
+                    "version": section.version,
+                })
+            )
+
+            logger.info("agent_task_done type=rewrite_section task_id=%s case_id=%s section_id=%s", agent_task_id, case_id, section_id)
+            return {"section_id": section_id, "status": "rewritten"}
+
+    except Exception as exc:
+        final = self.request.retries >= self.max_retries
+        _record_agent_task_error(agent_task_id, exc, started_at, final=final)
+        logger.exception("agent_task_error type=rewrite_section task_id=%s case_id=%s section_id=%s final=%s", agent_task_id, case_id, section_id, final)
+        raise self.retry(exc=exc)
+    finally:
+        redis_client.delete(lock_key)  # Release lock
+        engine.dispose()
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=3,
+    name="app.workers.agent_tasks.fix_fact",
+    queue="p0_fact_fix",
+)
+def fix_fact(self, case_id: str, fact_id: str, old_value: str, new_value: str):
+    """
+    P0 priority: update all draft sections that reference a corrected fact.
+    Triggered when a fact is disputed or corrected.
+    """
+    from app.models.draft import DraftSection
+    from sqlalchemy import select
+
+    engine, session = _get_db_session()
+    try:
+        with session:
+            sections = session.execute(
+                select(DraftSection).where(DraftSection.case_id == uuid.UUID(case_id))
+            ).scalars().all()
+
+            updated = 0
+            for section in sections:
+                if old_value.lower() in section.content.lower():
+                    section.content = section.content.replace(old_value, new_value)
+                    updated += 1
+
+            session.commit()
+            _invalidate_case_runtime_cache(case_id)
+
+            # Publish update event
+            redis_client.publish(
+                f"case:{case_id}:updates",
+                json.dumps({"type": "fact_fixed", "fact_id": fact_id, "sections_updated": updated})
+            )
+            return {"fact_id": fact_id, "sections_updated": updated}
+
+    except Exception as exc:
+        raise self.retry(exc=exc)
+    finally:
+        engine.dispose()
+
+
+def _split_into_sections(content: str, draft_title: str = "") -> list[tuple[str, str]]:
+    """
+    Split generated draft content into sections based on headers.
+    Returns list of (title, body) tuples.
+    """
+    import re
+
+    def clean_title(value: str) -> str:
+        value = value.strip()
+        value = re.sub(r"^#{1,6}\s+", "", value)
+        value = re.sub(r"^\*\*(.+)\*\*$", r"\1", value)
+        value = re.sub(r"^(?:title|document title|petition title)[:：]\s*", "", value, flags=re.IGNORECASE)
+        return value.strip(" \t:-–—")
+
+    def looks_like_document_title(value: str) -> bool:
+        title = clean_title(value)
+        lower = title.lower()
+        if not title or len(title) > 140:
+            return False
+        if lower in {"introduction", "background", "summary", "conclusion"}:
+            return False
+        if re.match(r"^(?:[ivx]+\.\s+|criterion\s+\d+)", lower, re.IGNORECASE):
+            return False
+        return any(token in lower for token in ("petition", "letter", "brief", "application", "申请", "文案"))
+
+    content = strip_think_tags(content)
+    lines = content.split('\n')
+
+    document_title = clean_title(draft_title)
+    first_content_idx = next((idx for idx, line in enumerate(lines) if line.strip()), None)
+    if first_content_idx is not None:
+        first_line = lines[first_content_idx].strip()
+        first_title = ""
+        if re.match(r"^#\s+\S+", first_line):
+            first_title = clean_title(first_line)
+        elif re.match(r"^\*\*.+\*\*$", first_line) or re.match(r"^(?:title|document title|petition title)[:：]\s*", first_line, re.IGNORECASE):
+            first_title = clean_title(first_line)
+        elif looks_like_document_title(first_line):
+            first_title = clean_title(first_line)
+
+        if first_title:
+            document_title = first_title
+            del lines[first_content_idx]
+
+    sections: list[tuple[str, str]] = []
+    # Match headers like "I. INTRODUCTION", "## Summary", "CRITERION 1:", etc.
+    pattern = r'^(?:#{1,3}\s+|[IVX]+\.\s+|CRITERION\s+\d+[:\.]?\s*)(.+)$'
+    current_title = document_title or "Generated Draft"
+    current_body: list[str] = []
+
+    for line in lines:
+        m = re.match(pattern, line.strip(), re.IGNORECASE)
+        if m and len(line.strip()) < 120:
+            next_title = clean_title(m.group(1))
+            has_body = bool('\n'.join(current_body).strip())
+            if has_body:
+                sections.append((current_title, '\n'.join(current_body).strip()))
+                current_title = next_title
+                current_body = []
+            elif document_title and not sections:
+                current_body = [next_title, ""]
+            else:
+                current_title = next_title
+        else:
+            current_body.append(line)
+
+    if current_body or not sections:
+        sections.append((current_title, '\n'.join(current_body).strip()))
+
+    return sections if sections else [("Generated Draft", content)]
+
+
+def _full_draft_from_content(content: str, draft_title: str = "") -> tuple[str, str]:
+    """
+    Return a single full-draft title/body pair.
+
+    The model may still include Markdown headings inside the draft for readability,
+    but the product treats each generated version as one full draft item.
+    """
+    cleaned = _strip_reasoning_and_code_fences(content)
+    lines = cleaned.splitlines()
+    title = draft_title.strip()
+
+    if lines:
+        first = lines[0].strip()
+        if first.startswith("# "):
+            title = title or first.lstrip("#").strip()
+            body = "\n".join(lines[1:]).strip()
+            return title or "Generated Draft", body or cleaned
+
+    return title or "Generated Draft", cleaned
+
+
+def _strip_reasoning_and_code_fences(content: str) -> str:
+    import re
+    value = strip_think_tags(content)
+    value = re.sub(r"^```(?:markdown|md|text)?\s*", "", value, flags=re.IGNORECASE).strip()
+    value = re.sub(r"\s*```\s*$", "", value).strip()
+    return value
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    name="app.workers.agent_tasks.generate_rfi",
+)
+def generate_rfi(self, case_id: str, rfi_text: str, agent_task_id: str):
+    """
+    Generate RFI/RFE response letter using AI.
+    """
+    from app.models.agent_task import AgentTask, AgentTaskStatus
+    from app.models.fact import Fact, FactStatus
+    from app.models.case import Case
+    from app.models.organization import Organization
+    from sqlalchemy import select
+    from app.llm.provider import LLMService
+
+    started_at = time.perf_counter()
+    logger.info("agent_task_start type=generate_rfi task_id=%s case_id=%s", agent_task_id, case_id)
+    engine, session = _get_db_session()
+    try:
+        with session:
+            agent_task = session.get(AgentTask, uuid.UUID(agent_task_id))
+            _mark_processing(agent_task)
+            session.commit()
+
+            facts_result = session.execute(
+                select(Fact).where(
+                    Fact.case_id == uuid.UUID(case_id),
+                    Fact.status == FactStatus.lawyer_approved,
+                ).limit(30)
+            )
+            facts = [{"category": f.category, "content": f.content} for f in facts_result.scalars().all()]
+            facts_str = json.dumps(facts, ensure_ascii=False, indent=2)
+            case = session.get(Case, uuid.UUID(case_id))
+            org = session.get(Organization, case.org_id) if case else None
+            org_settings = org.settings if org and org.settings else {}
+
+            prompt = f"""
+You are an expert US immigration lawyer. The USCIS has issued an RFI/RFE (Request for Evidence) for an EB-1A petition.
+Please draft a professional, persuasive response letter addressing the USCIS's concerns.
+
+RFI/RFE Text from USCIS:
+{rfi_text}
+
+Approved Case Facts:
+{facts_str}
+
+Please generate the response letter in markdown format.
+"""
+            # Call LLM
+            response_content = _run_async(LLMService.from_org_settings(org_settings).generate(
+                prompt=prompt,
+                system_prompt="You are an expert US immigration lawyer.",
+            ))
+
+            # Save result (for simplicity, storing in agent_task output, in reality might be a new Document or DraftSection)
+            _mark_completed(agent_task, {"rfi_response": response_content, "fact_count": len(facts)}, started_at)
+            session.commit()
+            _invalidate_case_runtime_cache(case_id)
+
+            # Broadcast WS
+            redis_client.publish(
+                f"case:{case_id}",
+                json.dumps({
+                    "type": "rfi_generated",
+                    "task_id": agent_task_id
+                })
+            )
+
+            logger.info("agent_task_done type=generate_rfi task_id=%s case_id=%s fact_count=%s", agent_task_id, case_id, len(facts))
+            return {"case_id": case_id, "status": "rfi_generated"}
+    except Exception as exc:
+        final = self.request.retries >= self.max_retries
+        _record_agent_task_error(agent_task_id, exc, started_at, final=final)
+        logger.exception("agent_task_error type=generate_rfi task_id=%s case_id=%s final=%s", agent_task_id, case_id, final)
+        raise self.retry(exc=exc)
+    finally:
+        engine.dispose()

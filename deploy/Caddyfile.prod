@@ -1,0 +1,15 @@
+{$APP_DOMAIN} {
+  encode zstd gzip
+
+  @api path /api/* /health
+  reverse_proxy @api api:8000
+
+  @ws path /ws/*
+  reverse_proxy @ws api:8000
+
+  handle {
+    root * /srv
+    try_files {path} /index.html
+    file_server
+  }
+}
