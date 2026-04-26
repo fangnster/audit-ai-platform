@@ -54,8 +54,15 @@ export default function RegisterPage() {
       await authApi.register(email, name, password, passwordConfirm, orgName)
       toast.success('注册成功，请登录')
       navigate('/login')
-    } catch {
-      toast.error('注册失败，该邮箱可能已被使用')
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail
+      const rawMessage = Array.isArray(detail)
+        ? detail.map((item: any) => item?.msg || item).filter(Boolean).join('；')
+        : detail
+      const message = rawMessage === 'Email already registered'
+        ? '该邮箱已注册，请直接登录或换一个邮箱'
+        : rawMessage || '注册失败，请检查填写信息后重试'
+      toast.error(message)
     } finally {
       setLoading(false)
     }
