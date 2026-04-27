@@ -5,6 +5,7 @@ import toast from 'react-hot-toast'
 import { Activity, FileText, BookOpen, CheckSquare, Files } from 'lucide-react'
 import { casesApi } from '../api'
 import { formatLocalDateTime } from '../utils/time'
+import { notificationHistoryMeta } from '../utils/notificationHistory'
 
 const MODULE_LINKS = [
   { path: 'documents', icon: Files,      labelKey: 'documentUpload', descZh: '上传证据材料和案件文件', descEn: 'Upload evidence and case files' },
@@ -23,14 +24,19 @@ export default function CaseDetailPage() {
     queryFn: () => casesApi.get(caseId!),
   })
   const c = data?.data
+  const caseMeta = () => notificationHistoryMeta({
+    category: 'case_task',
+    type_name: c?.case_type || t('cases'),
+    object_name: c?.title || t('cases'),
+  })
   const updateStatusMutation = useMutation({
     mutationFn: (status: string) => casesApi.update(caseId!, { status }),
     onSuccess: () => {
-      toast.success('案件状态已更新')
+      toast.success('案件状态已更新', caseMeta())
       qc.invalidateQueries({ queryKey: ['case', caseId] })
       qc.invalidateQueries({ queryKey: ['cases'] })
     },
-    onError: () => toast.error('状态更新失败'),
+    onError: () => toast.error('状态更新失败', caseMeta()),
   })
 
   if (isLoading) return <div style={{ padding: 40, textAlign: 'center' }}><span className="spinner" /></div>

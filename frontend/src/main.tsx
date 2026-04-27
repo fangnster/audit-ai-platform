@@ -6,9 +6,11 @@ import { Toaster } from 'react-hot-toast'
 import './index.css'
 import './i18n'
 import App from './App'
+import { installToastHistoryRecorder } from './utils/notificationHistory'
 
 const savedTheme = localStorage.getItem('ui-theme')
 document.documentElement.dataset.theme = savedTheme === 'dark' ? 'dark' : 'light'
+installToastHistoryRecorder()
 
 const queryClient = new QueryClient({
   defaultOptions: {

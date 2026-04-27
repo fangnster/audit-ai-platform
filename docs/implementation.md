@@ -99,11 +99,13 @@ React 18 + TypeScript + Vite
 | `frontend/src/pages/GlobalTasksPage.tsx` | 任务中心，跨案件任务 |
 | `frontend/src/pages/AgentRunsPage.tsx` | 当前案件 Agent 运行记录 |
 | `frontend/src/components/AgentRunLogPanel.tsx` | Agent 运行记录展示组件 |
+| `frontend/src/components/NotificationHistoryButton.tsx` | 顶部告警历史入口、成功/失败过滤、搜索和清空 |
 | `frontend/src/pages/KnowledgePage.tsx` | 律师个人知识库 |
-| `frontend/src/pages/SettingsPage.tsx` | 个人信息、公司/律所字段、主题、模型设置、密码 |
+| `frontend/src/pages/SettingsPage.tsx` | 个人信息、公司/律所字段、主题、告警设置、模型设置、密码 |
 | `frontend/src/pages/AdminPage.tsx` | 系统后台 |
 | `frontend/src/api.ts` | API 封装和错误处理 |
 | `frontend/src/utils/llmError.ts` | 大模型错误可读化 |
+| `frontend/src/utils/notificationHistory.ts` | React Hot Toast 告警历史、类别偏好和元信息封装 |
 
 前端实现原则：
 
@@ -112,6 +114,7 @@ React 18 + TypeScript + Vite
 - 大模型失败时尽量展示可读错误，避免只显示网络异常。
 - 解析和重解析弹窗保持知识库选择体验一致。
 - 文件解析、事实重解析、文案生成和 AI 重写都可以在案件内 Agent 运行记录页追踪状态和结果。
+- 告警历史中的名称优先使用源对象名称，例如原始文件名、事实内容、文案标题、案件名或任务名，而不是“已保存”“已删除”等操作文案。
 
 ## 5. 后端路由
 
@@ -185,7 +188,7 @@ React 18 + TypeScript + Vite
 
 1. 用户注册邮箱、密码、姓名和公司/律所名称。
 2. 公司/律所名称写入 `users.firm_name`。
-3. 设置页可修改姓名、电话、公司/律所名称、密码、主题和模型设置。
+3. 设置页可修改姓名、电话、公司/律所名称、密码、主题、告警偏好和模型设置。
 4. `SYSTEM_ADMIN_EMAILS` 中匹配的邮箱注册或登录后会获得系统管理员角色。
 
 ### 8.2 案件管理
@@ -460,6 +463,48 @@ SYSTEM_ADMIN_EMAILS=admin@example.com
 
 匹配邮箱的用户注册或重新登录后会被提升为系统管理员。
 
+### 8.11 告警栏与历史查询
+
+核心文件：
+
+```text
+frontend/src/utils/notificationHistory.ts
+frontend/src/components/NotificationHistoryButton.tsx
+frontend/src/pages/SettingsPage.tsx
+```
+
+实现方式：
+
+- `notificationHistory.ts` 包装 `react-hot-toast` 的 `toast.success` 和 `toast.error`，在弹出前先读取本地告警偏好。
+- 告警偏好保存在浏览器 `localStorage`，不是后端数据库配置。
+- 偏好包括总开关，以及每个 `NotificationCategory` 的 `popup` 和 `history` 两个开关。
+- `notificationHistoryMeta` 为业务 toast 写入 `category`、`type_name` 和 `object_name`。
+- 记录页只提供全部、成功、失败过滤；类别用于展示和搜索，不再作为历史页过滤项。
+- 历史搜索覆盖消息、类别、类型名称和源对象名称。
+
+类别规则：
+
+- `task_submission`：后台任务提交，例如解析任务已提交、文案生成已提交。
+- `agent_document` / `agent_fact` / `agent_draft`：Agent 文件解析、事实重解析、文案生成和 AI 重写结果。
+- `translation`：事实和文案翻译。
+- `document` / `fact` / `draft`：文件、事实和文案的普通操作。
+- `case_task` / `knowledge` / `account_system` / `system`：案件任务、知识库、账号系统和兜底系统消息。
+
+源对象命名规则：
+
+- 文件操作使用原始文件名，类型名称使用上传文件类型的可读文案。
+- 事实操作使用事实内容摘要。
+- 文案生成、AI 重写、翻译、导出、删除和恢复使用文案标题或段落标题。
+- 案件、任务、知识库、后台用户操作使用案件名、任务名、知识库标题或用户姓名邮箱。
+- WebSocket 推送会尽量从 TanStack Query 缓存中追溯段落标题、事实内容或案件名。
+- 如果业务入口未提供元信息，历史页才回退到消息解析或页面名称。
+
+产品边界：
+
+- 告警历史是律师轻量回看成功/失败的入口，不替代 Agent 运行记录。
+- Agent 输入、诊断、分块、覆盖率、事实依据、失败原因等详细信息仍在案件内「Agent 运行记录」查看。
+- 本地浏览器清除缓存或更换设备后，告警历史和告警偏好不会自动同步。
+
 ## 9. LLM Provider
 
 核心文件：
@@ -626,6 +671,7 @@ backend/tests
 - 事实异议重解析。
 - 文案拆分、生成 prompt、重写历史。
 - Agent 任务超时释放、重复提交保护和后台解析投递。
+- 告警历史元信息、类别偏好和源对象名称追踪。
 - 组织兼容和模型设置。
 - 翻译错误和缓存行为。
 - 管理员删除用户和案件。

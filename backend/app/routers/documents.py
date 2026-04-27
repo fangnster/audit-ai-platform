@@ -10,7 +10,7 @@ from typing import Optional
 from urllib.parse import quote
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.deps import CurrentUser, DB, ensure_case_member
 from app.models.document import Document, UploaderRole, ParseStatus
@@ -130,6 +130,45 @@ def attachment_headers(filename: str) -> dict[str, str]:
     return {"Content-Disposition": f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded_name}"}
 
 
+def _enum_text(value) -> str:
+    return str(value.value if hasattr(value, "value") else value)
+
+
+def _document_type_label_for_user(doc_type: str, user) -> str:
+    type_id = str(doc_type or "")
+    for item in _document_types_for_user(user):
+        if item.get("id") == type_id:
+            return str(item.get("label") or type_id)
+    return type_id
+
+
+def _short_trace_text(value, limit: int = 500) -> str:
+    text = str(value or "").strip().replace("\r\n", "\n")
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + f"...（已截断 {len(text) - limit} 字）"
+
+
+def _fact_trace_pairs(fact, *, document_name: str, document_type: str) -> list[tuple[str, str]]:
+    structured = dict(fact.structured_data or {})
+    pairs: list[tuple[str, str]] = [
+        ("来源文件", document_name),
+        ("上传文件类型", document_type),
+    ]
+    for label, key in (
+        ("页码/位置", "page"),
+        ("原文摘录", "quote"),
+        ("原始来源说明", "source"),
+        ("标题/项目", "title"),
+        ("日期", "date"),
+        ("机构/组织", "organization"),
+    ):
+        value = structured.get(key)
+        if value is not None and str(value).strip():
+            pairs.append((label, _short_trace_text(value)))
+    return pairs
+
+
 def local_storage_path(storage_path: str) -> str:
     return os.path.join("/tmp", "immigration_uploads", storage_path)
 
@@ -195,6 +234,7 @@ def read_document_bytes(doc: Document) -> bytes:
 
 async def _invalidate_document_cache(case_id: uuid.UUID) -> None:
     await delete_pattern(f"documents:{case_id}:*")
+    await delete_pattern(f"agent-tasks:{case_id}:*")
     await delete_pattern("admin:v1:*")
 
 
@@ -379,7 +419,8 @@ async def list_documents(
         if cat:
             query = query.where(Document.category_id == cat.id)
 
-    result = await db.execute(query.order_by(Document.created_at.desc()))
+    display_time = func.coalesce(Document.updated_at, Document.created_at)
+    result = await db.execute(query.order_by(display_time.desc(), Document.created_at.desc()))
     docs = result.scalars().all()
 
     payload = [
@@ -454,6 +495,7 @@ async def trigger_parse(doc_id: uuid.UUID, body: Optional[ParseRequest] = None, 
         return {
             "doc_id": str(doc.id),
             "agent_task_id": str(running_task.id),
+            "already_running": True,
             "status": str(running_task.status.value if hasattr(running_task.status, "value") else running_task.status),
             "message": "该文件已有解析任务在后台处理中，请稍候查看 Agent 运行记录。",
         }
@@ -593,6 +635,7 @@ async def export_document_text(doc_id: uuid.UUID, export_format: str = "txt", cu
 
     now = local_display()
     safe_name = doc.original_filename.replace('"', '_').replace('/', '_')[:50]
+    doc_type_label = _document_type_label_for_user(str(doc.doc_type), current_user)
 
     # Build metadata section
     meta = doc.extracted_metadata or {}
@@ -604,18 +647,27 @@ async def export_document_text(doc_id: uuid.UUID, export_format: str = "txt", cu
         lines.append(f"- **导出时间**：{now}")
         lines.append(f"- **创建时间**：{local_display(doc.created_at)}")
         lines.append(f"- **修改时间**：{local_display(doc.updated_at or doc.created_at)}")
-        lines.append(f"- **文档类型**：{doc.doc_type}")
-        lines.append(f"- **解析状态**：{doc.parse_status}")
+        lines.append(f"- **原始文件名**：{doc.original_filename}")
+        lines.append(f"- **上传文件类型**：{doc_type_label}")
+        lines.append(f"- **解析状态**：{_enum_text(doc.parse_status)}")
         lines.append(f"- **提取事实数**：{fact_count}")
         if parse_prompt:
             lines.append(f"- **解析提示词**：{parse_prompt}")
         lines.append("\n---\n")
+        lines.append("## 来源追踪说明")
+        lines.append("- 本导出按原始上传文件汇总 AI 提取的事实，供律师复核事实来源。")
+        lines.append("- 每条事实下方列出来源文件、上传文件类型、页码/位置、原文摘录等可读线索；若原文件未提供相关字段，则不会显示。")
+        lines.append("\n---\n")
         if facts:
             for i, f in enumerate(facts, 1):
                 lines.append(f"## 事实 {i} — [{f.category}]")
-                lines.append(f"**状态**: {f.status}  |  **置信度**: {f.confidence_score:.0%}\n")
+                lines.append(f"**状态**: {_enum_text(f.status)}  |  **置信度**: {float(f.confidence_score or 0):.0%}\n")
                 lines.append(f"**创建时间**: {local_display(f.created_at)}  |  **修改时间**: {local_display(f.updated_at or f.created_at)}\n")
                 lines.append(f"{f.content}\n")
+                lines.append("**来源追踪**")
+                for label, value in _fact_trace_pairs(f, document_name=doc.original_filename, document_type=doc_type_label):
+                    lines.append(f"- **{label}**：{value}")
+                lines.append("")
         else:
             lines.append("暂无提取事实。\n")
         content = "\n".join(lines)
@@ -630,19 +682,27 @@ async def export_document_text(doc_id: uuid.UUID, export_format: str = "txt", cu
         lines.append(f"导出时间：{now}")
         lines.append(f"创建时间：{local_display(doc.created_at)}")
         lines.append(f"修改时间：{local_display(doc.updated_at or doc.created_at)}")
-        lines.append(f"文档类型：{doc.doc_type}")
-        lines.append(f"解析状态：{doc.parse_status}")
+        lines.append(f"原始文件名：{doc.original_filename}")
+        lines.append(f"上传文件类型：{doc_type_label}")
+        lines.append(f"解析状态：{_enum_text(doc.parse_status)}")
         lines.append(f"提取事实数：{fact_count}")
         if parse_prompt:
             lines.append(f"解析提示词：{parse_prompt}")
         lines.append("=" * 60)
+        lines.append("来源追踪说明：")
+        lines.append("本导出按原始上传文件汇总 AI 提取的事实，供律师复核事实来源。")
+        lines.append("每条事实下方列出来源文件、上传文件类型、页码/位置、原文摘录等可读线索；若原文件未提供相关字段，则不会显示。")
+        lines.append("=" * 60)
         if facts:
             for i, f in enumerate(facts, 1):
                 lines.append(f"\n事实 {i} [{f.category}]")
-                lines.append(f"状态: {f.status}  |  置信度: {f.confidence_score:.0%}")
+                lines.append(f"状态: {_enum_text(f.status)}  |  置信度: {float(f.confidence_score or 0):.0%}")
                 lines.append(f"创建时间: {local_display(f.created_at)}  |  修改时间: {local_display(f.updated_at or f.created_at)}")
                 lines.append("-" * 40)
                 lines.append(f.content)
+                lines.append("来源追踪：")
+                for label, value in _fact_trace_pairs(f, document_name=doc.original_filename, document_type=doc_type_label):
+                    lines.append(f"- {label}：{value}")
         else:
             lines.append("\n暂无提取事实。")
         content = "\n".join(lines)

@@ -7,10 +7,12 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from app.deps import CurrentUser, DB
 from app.llm.provider import LLMService
+from app.services.cache import get_json, set_json
 from app.services.todo_org import get_or_create_todo_org
 
 router = APIRouter()
 
+TRANSLATION_CACHE_PREFIX = "translation:v1"
 TRANSLATION_CACHE_TTL_SECONDS = 30 * 60
 TRANSLATION_CACHE_MAX_ITEMS = 256
 _translation_cache: OrderedDict[str, tuple[float, str]] = OrderedDict()
@@ -50,7 +52,7 @@ def _translation_cache_key(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _get_cached_translation(key: str) -> Optional[str]:
+def _get_local_cached_translation(key: str) -> Optional[str]:
     cached = _translation_cache.get(key)
     if not cached:
         return None
@@ -62,11 +64,24 @@ def _get_cached_translation(key: str) -> Optional[str]:
     return translated
 
 
-def _set_cached_translation(key: str, translated: str) -> None:
+def _set_local_cached_translation(key: str, translated: str) -> None:
     _translation_cache[key] = (time.monotonic(), translated)
     _translation_cache.move_to_end(key)
     while len(_translation_cache) > TRANSLATION_CACHE_MAX_ITEMS:
         _translation_cache.popitem(last=False)
+
+
+async def _get_cached_translation(key: str) -> Optional[str]:
+    cached = await get_json(f"{TRANSLATION_CACHE_PREFIX}:{key}")
+    if isinstance(cached, str):
+        _set_local_cached_translation(key, cached)
+        return cached
+    return _get_local_cached_translation(key)
+
+
+async def _set_cached_translation(key: str, translated: str) -> None:
+    _set_local_cached_translation(key, translated)
+    await set_json(f"{TRANSLATION_CACHE_PREFIX}:{key}", translated, ttl=TRANSLATION_CACHE_TTL_SECONDS)
 
 
 @router.post("")
@@ -91,7 +106,7 @@ async def translate(body: TranslateRequest, current_user: CurrentUser, db: DB):
         target_lang=target_lang,
         org_settings=org_settings,
     )
-    cached = _get_cached_translation(cache_key)
+    cached = await _get_cached_translation(cache_key)
     if cached is not None:
         return {"translated": cached, "source_lang": source_lang, "target_lang": target_lang, "cached": True}
 
@@ -106,5 +121,5 @@ async def translate(body: TranslateRequest, current_user: CurrentUser, db: DB):
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Translation failed: {exc}") from exc
 
-    _set_cached_translation(cache_key, translated)
+    await _set_cached_translation(cache_key, translated)
     return {"translated": translated, "source_lang": source_lang, "target_lang": target_lang, "cached": False}

@@ -10,6 +10,7 @@ import {
 import { casesApi } from '../api'
 import { ConfirmActionKind, ConfirmActionModal, ObjectLifecycleActions } from '../components/ObjectLifecycleActions'
 import { formatLocalDateTime } from '../utils/time'
+import { notificationHistoryMeta } from '../utils/notificationHistory'
 
 const CASE_TYPES = ['EB1A', 'EB1B', 'NIW', 'O1A', 'EB2', 'EB3', 'H1B']
 const CASE_STATUSES = ['intake', 'fact_extraction', 'drafting', 'review', 'submitted']
@@ -86,6 +87,16 @@ export default function CasesPage() {
     setPage(1)
   }
   const sortIndicator = (field: string) => sortBy === field ? (sortOrder === 'asc' ? ' ↑' : ' ↓') : ''
+  const findCaseById = (id: string) => [...(activeData?.data ?? []), ...(trashData?.data ?? [])].find((item: CaseItem) => item.id === id)
+  const caseHistoryMeta = (name?: string, caseType?: string) => notificationHistoryMeta({
+    category: 'case_task',
+    type_name: caseType || t('cases'),
+    object_name: name || t('cases'),
+  })
+  const caseActionMeta = (id: string, fallbackName?: string) => {
+    const item = findCaseById(id)
+    return caseHistoryMeta(fallbackName || item?.title || confirmAction?.name, item?.case_type)
+  }
 
   // Mutations
   const createMutation = useMutation({
@@ -97,7 +108,7 @@ export default function CasesPage() {
       client_phone: clientPhone,
     }),
     onSuccess: () => {
-      toast.success(t('caseCreated'))
+      toast.success(t('caseCreated'), caseHistoryMeta(title, caseType))
       qc.invalidateQueries({ queryKey: ['cases'] })
       setShowCreateModal(false)
       setTitle('')
@@ -107,7 +118,7 @@ export default function CasesPage() {
     },
     onError: (err: any) => {
       const detail = err?.response?.data?.detail || t('createFailed')
-      toast.error(typeof detail === 'string' ? detail : t('createInputFailed'))
+      toast.error(typeof detail === 'string' ? detail : t('createInputFailed'), caseHistoryMeta(title, caseType))
     },
   })
 
@@ -121,17 +132,17 @@ export default function CasesPage() {
       client_phone: editClientPhone,
     }),
     onSuccess: () => {
-      toast.success(t('caseUpdated'))
+      toast.success(t('caseUpdated'), caseHistoryMeta(editTitle, editCaseType))
       qc.invalidateQueries({ queryKey: ['cases'] })
       setShowEditModal(false)
     },
-    onError: () => toast.error(t('updateFailed')),
+    onError: () => toast.error(t('updateFailed'), caseHistoryMeta(editTitle, editCaseType)),
   })
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => casesApi.softDelete(id),
-    onSuccess: () => {
-      toast.success(t('movedToTrash'))
+    onSuccess: (_data, id) => {
+      toast.success(t('movedToTrash'), caseActionMeta(id))
       qc.invalidateQueries({ queryKey: ['cases'] })
       qc.invalidateQueries({ queryKey: ['cases-trash'] })
     },
@@ -139,8 +150,8 @@ export default function CasesPage() {
 
   const restoreMutation = useMutation({
     mutationFn: (id: string) => casesApi.restore(id),
-    onSuccess: () => {
-      toast.success(t('caseRestored'))
+    onSuccess: (_data, id) => {
+      toast.success(t('caseRestored'), caseActionMeta(id))
       qc.invalidateQueries({ queryKey: ['cases'] })
       qc.invalidateQueries({ queryKey: ['cases-trash'] })
     },
@@ -148,8 +159,8 @@ export default function CasesPage() {
 
   const permanentDeleteMutation = useMutation({
     mutationFn: (id: string) => casesApi.permanentDelete(id),
-    onSuccess: () => {
-      toast.success(t('permanentlyDeleted'))
+    onSuccess: (_data, id) => {
+      toast.success(t('permanentlyDeleted'), caseActionMeta(id))
       qc.invalidateQueries({ queryKey: ['cases-trash'] })
     },
   })

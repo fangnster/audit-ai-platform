@@ -2,10 +2,22 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { Settings, User, Globe, Shield, Save, Bot, Building2, Phone, Palette, Sun, Moon, CheckCircle2, AlertCircle } from 'lucide-react'
+import { Settings, User, Globe, Shield, Save, Bot, Building2, Phone, Palette, Sun, Moon, CheckCircle2, AlertCircle, Bell } from 'lucide-react'
 import { useAuthStore } from '../store/auth'
 import { authApi, orgApi } from '../api'
 import { readableLlmError } from '../utils/llmError'
+import {
+  NOTIFICATION_CATEGORIES,
+  getNotificationPreferences,
+  notificationCategoryDescription,
+  notificationCategoryLabel,
+  notificationHistoryMeta,
+  resetNotificationPreferences,
+  setNotificationPreferences,
+  subscribeNotificationPreferences,
+  type NotificationCategory,
+  type NotificationPreferences,
+} from '../utils/notificationHistory'
 
 const BUILTIN_PROVIDERS = ['minimax', 'openai', 'claude', 'gemini', 'ollama']
 
@@ -13,10 +25,11 @@ export default function SettingsPage() {
   const { t, i18n } = useTranslation()
   const { user, setUser } = useAuthStore()
   const queryClient = useQueryClient()
-  const [activeTab, setActiveTab] = useState<'profile' | 'language' | 'appearance' | 'model' | 'security'>('profile')
+  const [activeTab, setActiveTab] = useState<'profile' | 'language' | 'appearance' | 'notifications' | 'model' | 'security'>('profile')
   const [theme, setTheme] = useState<'light' | 'dark'>(() =>
     localStorage.getItem('ui-theme') === 'dark' ? 'dark' : 'light'
   )
+  const [notificationPrefs, setNotificationPrefsState] = useState<NotificationPreferences>(() => getNotificationPreferences())
 
   const savedPhone = typeof user?.profile?.phone === 'string' ? user.profile.phone : ''
   const [name, setName] = useState(user?.name ?? '')
@@ -90,6 +103,11 @@ export default function SettingsPage() {
               : 'No API key configured; fill this if your gateway requires auth.')
   const passwordMismatch = newPasswordConfirm.length > 0 && newPassword !== newPasswordConfirm
   const canChangePassword = Boolean(currentPassword && newPassword.length >= 8 && newPassword === newPasswordConfirm)
+  const settingsHistoryMeta = (objectName: string, typeName = t('settings')) => notificationHistoryMeta({
+    category: 'account_system',
+    type_name: typeName,
+    object_name: objectName,
+  })
 
   useEffect(() => {
     if (!orgSettingsData?.data) return
@@ -102,6 +120,10 @@ export default function SettingsPage() {
     document.documentElement.dataset.theme = theme
     localStorage.setItem('ui-theme', theme)
   }, [theme])
+
+  useEffect(() => subscribeNotificationPreferences(() => {
+    setNotificationPrefsState(getNotificationPreferences())
+  }), [])
 
   useEffect(() => {
     setName(user?.name ?? '')
@@ -117,9 +139,9 @@ export default function SettingsPage() {
     }),
     onSuccess: (res) => {
       setUser(res.data)
-      toast.success(t('settingsSaved'))
+      toast.success(t('settingsSaved'), settingsHistoryMeta(name || email || t('profile'), t('profile')))
     },
-    onError: (err: any) => toast.error(err?.response?.data?.detail || t('updateFailed')),
+    onError: (err: any) => toast.error(err?.response?.data?.detail || t('updateFailed'), settingsHistoryMeta(name || email || t('profile'), t('profile'))),
   })
 
   const changePasswordMutation = useMutation({
@@ -132,9 +154,9 @@ export default function SettingsPage() {
       setCurrentPassword('')
       setNewPassword('')
       setNewPasswordConfirm('')
-      toast.success(i18n.language === 'zh' ? '密码已更新' : 'Password updated')
+      toast.success(i18n.language === 'zh' ? '密码已更新' : 'Password updated', settingsHistoryMeta(email || t('security'), t('security')))
     },
-    onError: (err: any) => toast.error(err?.response?.data?.detail || (i18n.language === 'zh' ? '密码更新失败' : 'Password update failed')),
+    onError: (err: any) => toast.error(err?.response?.data?.detail || (i18n.language === 'zh' ? '密码更新失败' : 'Password update failed'), settingsHistoryMeta(email || t('security'), t('security'))),
   })
 
   const modelPayload = () => ({
@@ -163,9 +185,9 @@ export default function SettingsPage() {
       setLlmApiKey('')
       setLlmTestResult(null)
       queryClient.invalidateQueries({ queryKey: ['org-settings'] })
-      toast.success(t('settingsSaved'))
+      toast.success(t('settingsSaved'), settingsHistoryMeta(llmModel || llmProvider || t('modelSettings'), t('modelSettings')))
     },
-    onError: (err: any) => toast.error(err?.response?.data?.detail || t('updateFailed')),
+    onError: (err: any) => toast.error(err?.response?.data?.detail || t('updateFailed'), settingsHistoryMeta(llmModel || llmProvider || t('modelSettings'), t('modelSettings'))),
   })
 
   const testGenerationMutation = useMutation({
@@ -177,12 +199,12 @@ export default function SettingsPage() {
         ? `实际生成测试通过 · ${data.model} · ${data.latency_ms}ms`
         : `Generation test passed · ${data.model} · ${data.latency_ms}ms`
       setLlmTestResult({ ok: true, message, sample: data.sample })
-      toast.success(i18n.language === 'zh' ? '实际生成测试通过' : 'Generation test passed')
+      toast.success(i18n.language === 'zh' ? '实际生成测试通过' : 'Generation test passed', settingsHistoryMeta(data.model || llmModel || t('modelSettings'), t('modelSettings')))
     },
     onError: (err: any) => {
       const message = readableLlmError(err, i18n.language, 'test')
       setLlmTestResult({ ok: false, message })
-      toast.error(message)
+      toast.error(message, settingsHistoryMeta(llmModel || llmProvider || t('modelSettings'), t('modelSettings')))
     },
   })
 
@@ -190,13 +212,49 @@ export default function SettingsPage() {
     { key: 'profile' as const,       icon: User,   label: t('profile') },
     { key: 'language' as const,      icon: Globe,  label: t('languageSettings') },
     { key: 'appearance' as const,    icon: Palette,label: i18n.language === 'zh' ? '外观' : 'Appearance' },
+    { key: 'notifications' as const, icon: Bell,   label: t('notifications') },
     { key: 'model' as const,         icon: Bot,    label: t('modelSettings') },
     { key: 'security' as const,      icon: Shield, label: t('security') },
   ]
 
+  const saveNotificationPrefs = (next: NotificationPreferences) => {
+    setNotificationPrefsState(next)
+    setNotificationPreferences(next)
+  }
+
+  const toggleNotificationMaster = (enabled: boolean) => {
+    saveNotificationPrefs({ ...notificationPrefs, enabled })
+  }
+
+  const toggleNotificationCategory = (
+    category: NotificationCategory,
+    field: keyof NotificationPreferences['categories'][NotificationCategory],
+    checked: boolean,
+  ) => {
+    saveNotificationPrefs({
+      ...notificationPrefs,
+      categories: {
+        ...notificationPrefs.categories,
+        [category]: {
+          ...notificationPrefs.categories[category],
+          [field]: checked,
+        },
+      },
+    })
+  }
+
+  const resetNotificationPrefs = () => {
+    resetNotificationPreferences()
+    setNotificationPrefsState(getNotificationPreferences())
+    toast.success(
+      t('notificationPreferencesReset'),
+      notificationHistoryMeta({ category: 'account_system', type_name: t('notifications'), object_name: t('notificationPreferenceTitle') }),
+    )
+  }
+
   const handleSave = () => {
     if (!firmName.trim()) {
-      toast.error('请填写公司/律所名称')
+      toast.error('请填写公司/律所名称', settingsHistoryMeta(name || email || t('profile'), t('profile')))
       return
     }
     saveProfileMutation.mutate()
@@ -204,11 +262,11 @@ export default function SettingsPage() {
 
   const handleChangePassword = () => {
     if (newPassword.length < 8) {
-      toast.error(i18n.language === 'zh' ? '新密码至少需要 8 位' : 'New password must be at least 8 characters')
+      toast.error(i18n.language === 'zh' ? '新密码至少需要 8 位' : 'New password must be at least 8 characters', settingsHistoryMeta(email || t('security'), t('security')))
       return
     }
     if (newPassword !== newPasswordConfirm) {
-      toast.error(i18n.language === 'zh' ? '两次输入的新密码不一致' : 'The two new passwords do not match')
+      toast.error(i18n.language === 'zh' ? '两次输入的新密码不一致' : 'The two new passwords do not match', settingsHistoryMeta(email || t('security'), t('security')))
       return
     }
     changePasswordMutation.mutate()
@@ -220,7 +278,7 @@ export default function SettingsPage() {
         ? '当前表单有未保存修改。请先保存设置，再测试已保存的模型。'
         : 'There are unsaved changes. Save settings first, then test the saved model.'
       setLlmTestResult({ ok: false, message })
-      toast.error(i18n.language === 'zh' ? '请先保存设置' : 'Save settings first')
+      toast.error(i18n.language === 'zh' ? '请先保存设置' : 'Save settings first', settingsHistoryMeta(llmModel || llmProvider || t('modelSettings'), t('modelSettings')))
       return
     }
     testGenerationMutation.mutate()
@@ -320,7 +378,10 @@ export default function SettingsPage() {
                 ].map(lang => (
                   <button
                     key={lang.code}
-                    onClick={() => { i18n.changeLanguage(lang.code); toast.success(`已切换到 ${lang.label}`) }}
+                    onClick={() => {
+                      i18n.changeLanguage(lang.code)
+                      toast.success(`已切换到 ${lang.label}`, settingsHistoryMeta(lang.label, t('languageSettings')))
+                    }}
                     className="fact-item"
                     style={{
                       cursor: 'pointer',
@@ -375,6 +436,120 @@ export default function SettingsPage() {
                     <div style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', lineHeight: 1.55 }}>{option.desc}</div>
                   </button>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'notifications' && (
+            <div>
+              <h2 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: 6 }}>{t('notificationPreferenceTitle')}</h2>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', lineHeight: 1.55, marginBottom: 20, maxWidth: 720 }}>
+                {t('notificationPreferenceSubtitle')}
+              </p>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 760 }}>
+                <label style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(0, 1fr) auto',
+                  gap: 16,
+                  alignItems: 'center',
+                  padding: '14px 0 16px',
+                  borderBottom: '1px solid var(--border)',
+                }}>
+                  <span>
+                    <span style={{ display: 'block', fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>
+                      {t('notificationMasterSwitch')}
+                    </span>
+                    <span style={{ display: 'block', color: 'var(--text-muted)', fontSize: '0.8rem', lineHeight: 1.5 }}>
+                      {t('notificationMasterSwitchDesc')}
+                    </span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={notificationPrefs.enabled}
+                    onChange={event => toggleNotificationMaster(event.target.checked)}
+                    style={{ width: 18, height: 18, accentColor: 'var(--accent-primary)' }}
+                  />
+                </label>
+
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(220px, 1fr) 86px 86px',
+                  gap: 12,
+                  color: 'var(--text-muted)',
+                  fontSize: '0.75rem',
+                  fontWeight: 700,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.04em',
+                  padding: '0 10px',
+                }}>
+                  <span>{t('notificationCategoryColumn')}</span>
+                  <span style={{ textAlign: 'center' }}>{t('notificationPopupColumn')}</span>
+                  <span style={{ textAlign: 'center' }}>{t('notificationHistoryColumn')}</span>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {NOTIFICATION_CATEGORIES.map(category => {
+                    const preference = notificationPrefs.categories[category.key] || { popup: true, history: true }
+                    return (
+                      <div
+                        key={category.key}
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: 'minmax(220px, 1fr) 86px 86px',
+                          gap: 12,
+                          alignItems: 'center',
+                          padding: '12px 10px',
+                          borderRadius: 'var(--radius-sm)',
+                          background: 'var(--glass)',
+                          border: '1px solid var(--border)',
+                          opacity: notificationPrefs.enabled ? 1 : 0.58,
+                        }}
+                      >
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: 3 }}>
+                            {notificationCategoryLabel(category.key, i18n.language)}
+                          </div>
+                          <div style={{ color: 'var(--text-muted)', fontSize: '0.78rem', lineHeight: 1.45 }}>
+                            {notificationCategoryDescription(category.key, i18n.language)}
+                          </div>
+                        </div>
+                        <label style={{ display: 'flex', justifyContent: 'center' }}>
+                          <input
+                            type="checkbox"
+                            checked={preference.popup}
+                            disabled={!notificationPrefs.enabled}
+                            onChange={event => toggleNotificationCategory(category.key, 'popup', event.target.checked)}
+                            style={{ width: 16, height: 16, accentColor: 'var(--accent-primary)' }}
+                          />
+                        </label>
+                        <label style={{ display: 'flex', justifyContent: 'center' }}>
+                          <input
+                            type="checkbox"
+                            checked={preference.history}
+                            disabled={!notificationPrefs.enabled}
+                            onChange={event => toggleNotificationCategory(category.key, 'history', event.target.checked)}
+                            style={{ width: 16, height: 16, accentColor: 'var(--accent-primary)' }}
+                          />
+                        </label>
+                      </div>
+                    )
+                  })}
+                </div>
+
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                  flexWrap: 'wrap',
+                  paddingTop: 6,
+                }}>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>{t('notificationPreferencesAutoSaved')}</span>
+                  <button className="btn btn-ghost btn-sm" onClick={resetNotificationPrefs}>
+                    {t('notificationResetDefaults')}
+                  </button>
+                </div>
               </div>
             </div>
           )}

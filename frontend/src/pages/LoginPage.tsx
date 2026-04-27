@@ -5,6 +5,7 @@ import toast from 'react-hot-toast'
 import { Scale, Mail, Lock, Eye, EyeOff } from 'lucide-react'
 import { authApi } from '../api'
 import { useAuthStore } from '../store/auth'
+import { notificationHistoryMeta } from '../utils/notificationHistory'
 
 export default function LoginPage() {
   const { t } = useTranslation()
@@ -16,6 +17,11 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const emailRef = useRef<HTMLInputElement>(null)
   const passwordRef = useRef<HTMLInputElement>(null)
+  const loginMeta = () => notificationHistoryMeta({
+    category: 'account_system',
+    type_name: t('login'),
+    object_name: email || t('email'),
+  })
 
   // Aggressively clear form on mount — defeat browser autofill
   useEffect(() => {
@@ -60,10 +66,10 @@ export default function LoginPage() {
       // Pass token directly — store isn't updated yet so interceptor won't have it
       const meRes = await authApi.me(access_token)
       setAuth(access_token, refresh_token, meRes.data)
-      toast.success(t('success'))
+      toast.success(t('success'), loginMeta())
       navigate('/')
     } catch {
-      toast.error('登录失败，请检查邮箱和密码')
+      toast.error('登录失败，请检查邮箱和密码', loginMeta())
     } finally {
       setLoading(false)
     }

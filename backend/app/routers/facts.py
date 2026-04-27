@@ -119,6 +119,7 @@ def _fact_payload(f: Fact) -> dict:
 
 async def _invalidate_fact_cache(case_id: uuid.UUID) -> None:
     await delete_pattern(f"facts:{case_id}:*")
+    await delete_pattern(f"agent-tasks:{case_id}:*")
 
 
 async def _get_fact_for_user(fact_id: uuid.UUID, current_user, db: DB) -> Fact:

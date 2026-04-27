@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Activity, ArrowUpDown, CheckSquare, ChevronLeft, ChevronRight, FileSearch, PenLine, RefreshCw } from 'lucide-react'
-import { casesApi, draftsApi } from '../api'
+import { casesApi, docsApi, draftsApi } from '../api'
 import { AgentRunLogPanel, type AgentTask } from '../components/AgentRunLogPanel'
 import { useCaseWebSocket } from '../hooks/useWebSocket'
 
@@ -46,6 +46,18 @@ export default function AgentRunsPage() {
     staleTime: 15_000,
     refetchInterval: 5_000,
   })
+  const { data: docTypesData } = useQuery({
+    queryKey: ['document-types'],
+    queryFn: () => docsApi.types(),
+  })
+  const docTypeLabels = useMemo(() => {
+    const items = docTypesData?.data?.items
+    if (!Array.isArray(items)) return {}
+    return items.reduce<Record<string, string>>((acc, item: any) => {
+      if (item?.id && item?.label) acc[String(item.id)] = String(item.label)
+      return acc
+    }, {})
+  }, [docTypesData])
 
   const allTasks = useMemo(() => {
     const tasks: AgentTask[] = tasksData?.data ?? []
@@ -128,7 +140,13 @@ export default function AgentRunsPage() {
         </div>
       ) : (
         <>
-          <AgentRunLogPanel tasks={pagedTasks} maxItems={PAGE_SIZE} title={t(activeMeta.labelKey)} totalItems={visibleTasks.length} />
+          <AgentRunLogPanel
+            tasks={pagedTasks}
+            maxItems={PAGE_SIZE}
+            title={t(activeMeta.labelKey)}
+            totalItems={visibleTasks.length}
+            docTypeLabels={docTypeLabels}
+          />
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 14 }}>
             <button className="btn btn-ghost btn-sm" disabled={page <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>
               <ChevronLeft size={14} /> {t('previousPage')}

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useDropzone } from 'react-dropzone'
@@ -16,6 +16,7 @@ import type { AgentTask } from '../components/AgentRunLogPanel'
 import { ConfirmActionKind, ConfirmActionModal, ObjectLifecycleActions } from '../components/ObjectLifecycleActions'
 import { formatLocalDateTime } from '../utils/time'
 import { readableLlmError } from '../utils/llmError'
+import { notificationHistoryMeta } from '../utils/notificationHistory'
 
 type DocTypeOption = { id: string; label: string; icon?: string; enabled?: boolean; builtin?: boolean }
 
@@ -85,7 +86,7 @@ export default function DocumentsPage() {
   const [showTypeSettings, setShowTypeSettings] = useState(false)
   const [docTypeDrafts, setDocTypeDrafts] = useState<DocTypeOption[]>([])
   const [savingTypes, setSavingTypes] = useState(false)
-  const [sortBy, setSortBy] = useState<'created_at' | 'filename' | 'doc_type'>('created_at')
+  const [sortBy, setSortBy] = useState<'updated_at' | 'filename' | 'doc_type'>('updated_at')
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
   const [page, setPage] = useState(1)
   const [viewMode, setViewMode] = useState<'active' | 'trash'>('active')
@@ -99,6 +100,9 @@ export default function DocumentsPage() {
   const [parsing, setParsing] = useState(false)
   const [parseKnowledgeSearch, setParseKnowledgeSearch] = useState('')
   const [selectedParseKnowledgeIds, setSelectedParseKnowledgeIds] = useState<string[]>([])
+  const parseTaskStatusRef = useRef<Record<string, string>>({})
+  const submittedParseTaskIdsRef = useRef<Set<string>>(new Set())
+  const notifiedParseTaskIdsRef = useRef<Set<string>>(new Set())
 
   const { data: docTypesData } = useQuery({
     queryKey: ['document-types'],
@@ -184,11 +188,58 @@ export default function DocumentsPage() {
   ), [agentTasks])
   const parseTaskSignature = parseAgentTasks.map(task => `${task.id}:${task.status}:${task.updated_at}`).join('|')
 
+  const parseTaskDocumentName = (task: AgentTask) => (
+    String(
+      task.human_context?.document?.name ||
+      task.summary?.document_name ||
+      task.output_result?.document_name ||
+      task.input_params?.document_name ||
+      t('itemDocument'),
+    )
+  )
+  const parseTaskDocType = (task: AgentTask) => String(
+    task.human_context?.document?.type ||
+    task.summary?.doc_type ||
+    task.output_result?.doc_type ||
+    task.input_params?.doc_type ||
+    '',
+  )
+
   useEffect(() => {
     if (!caseId || !parseAgentTasks.some(task => task.status === 'completed' || task.status === 'failed')) return
     qc.invalidateQueries({ queryKey: ['docs', caseId] })
     qc.invalidateQueries({ queryKey: ['facts', caseId] })
   }, [caseId, parseTaskSignature, qc])
+
+  useEffect(() => {
+    parseAgentTasks
+      .filter(task => task.task_type === 'fact_extract')
+      .forEach(task => {
+        const taskId = String(task.id)
+        const previousStatus = parseTaskStatusRef.current[taskId]
+        const isTerminal = task.status === 'completed' || task.status === 'failed'
+        const wasSubmittedHere = submittedParseTaskIdsRef.current.has(taskId)
+        const shouldNotify = isTerminal && !notifiedParseTaskIdsRef.current.has(taskId) && (
+          wasSubmittedHere || (previousStatus && previousStatus !== task.status)
+        )
+        if (shouldNotify) {
+          const name = parseTaskDocumentName(task)
+          const typeId = parseTaskDocType(task)
+          const meta = docHistoryMeta(name, typeId, 'agent_document')
+          if (task.status === 'completed') {
+            const count = task.summary?.facts_extracted ?? task.output_result?.facts_extracted ?? 0
+            toast.success(t('parseTaskCompletedToast', { name, count }), meta)
+          } else {
+            const reason = task.error_message || task.output_result?.error || ''
+            const reasonPrefix = i18n.language.startsWith('zh') ? '：' : ': '
+            toast.error(t('parseTaskFailedToast', { name, reason: reason ? `${reasonPrefix}${reason}` : '' }), meta)
+          }
+          notifiedParseTaskIdsRef.current.add(taskId)
+          submittedParseTaskIdsRef.current.delete(taskId)
+        }
+        parseTaskStatusRef.current[taskId] = task.status
+      })
+  }, [parseTaskSignature, i18n.language])
 
   const { data: trashData } = useQuery({
     queryKey: ['docs', caseId, 'trash'],
@@ -201,7 +252,15 @@ export default function DocumentsPage() {
     ? (catFilter ? allDocs.filter(d => d.doc_type === catFilter) : allDocs)
     : trashDocs
 
+  const documentDisplayTime = (doc: any) => String(doc.updated_at || doc.created_at || '')
   const sortedDocs = [...displayDocs].sort((a, b) => {
+    if (sortBy === 'updated_at') {
+      const av = Date.parse(documentDisplayTime(a)) || 0
+      const bv = Date.parse(documentDisplayTime(b)) || 0
+      const primary = sortOrder === 'asc' ? av - bv : bv - av
+      if (primary !== 0) return primary
+      return String(a.filename || '').localeCompare(String(b.filename || ''))
+    }
     const av = a[sortBy] ?? '', bv = b[sortBy] ?? ''
     return sortOrder === 'asc' ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av))
   })
@@ -214,19 +273,31 @@ export default function DocumentsPage() {
     acc[key].push(d)
     return acc
   }, {})
+  const docHistoryMeta = (filename: string, typeId?: string, category: 'document' | 'agent_document' = 'document') => notificationHistoryMeta({
+    category,
+    type_name: typeId ? docTypeLabel(typeId) : t('itemDocument'),
+    object_name: filename,
+  })
+  const findDocById = (docId: string) => [...allDocs, ...trashDocs].find(item => item.id === docId)
+  const docActionMeta = (docId: string, fallbackName?: string) => {
+    const doc = findDocById(docId)
+    return docHistoryMeta(fallbackName || doc?.filename || confirmAction?.name || t('itemDocument'), doc?.doc_type)
+  }
 
   // Upload — no auto-parse
   const onDrop = useCallback(async (accepted: File[]) => {
     if (!accepted.length) return
     setUploading(true)
+    let currentFile = accepted[0]
     try {
       for (const file of accepted) {
+        currentFile = file
         await docsApi.upload(caseId!, file, docType)
-        toast.success(`${file.name} 上传成功，请手动触发解析`)
+        toast.success(`${file.name} 上传成功，请手动触发解析`, docHistoryMeta(file.name, docType))
       }
       qc.invalidateQueries({ queryKey: ['docs', caseId] })
     } catch {
-      toast.error('上传失败')
+      toast.error('上传失败', docHistoryMeta(currentFile.name, docType))
     } finally {
       setUploading(false)
     }
@@ -270,18 +341,27 @@ export default function DocumentsPage() {
     })).filter(item => item.id)
 
     if (!cleaned.some(item => item.enabled)) {
-      toast.error(t('documentTypesNeedOne'))
+      toast.error(
+        t('documentTypesNeedOne'),
+        notificationHistoryMeta({ category: 'document', type_name: t('documentTypeSettings'), object_name: t('documentTypeSettings') }),
+      )
       return
     }
 
     setSavingTypes(true)
     try {
       await docsApi.updateTypes(cleaned)
-      toast.success(t('documentTypesSaved'))
+      toast.success(
+        t('documentTypesSaved'),
+        notificationHistoryMeta({ category: 'document', type_name: t('documentTypeSettings'), object_name: t('documentTypeSettings') }),
+      )
       qc.invalidateQueries({ queryKey: ['document-types'] })
       setShowTypeSettings(false)
     } catch (e: any) {
-      toast.error(e?.response?.data?.detail || t('error'))
+      toast.error(
+        e?.response?.data?.detail || t('error'),
+        notificationHistoryMeta({ category: 'document', type_name: t('documentTypeSettings'), object_name: t('documentTypeSettings') }),
+      )
     } finally {
       setSavingTypes(false)
     }
@@ -290,7 +370,8 @@ export default function DocumentsPage() {
   // Open parse dialog
   const openParseDialog = (docId: string, docName: string) => {
     if (runningParseDocIds.has(docId)) {
-      toast.error(t('parseTaskAlreadyRunning'))
+      const doc = allDocs.find(item => item.id === docId)
+      toast.error(t('parseTaskAlreadyRunning'), docHistoryMeta(docName, doc?.doc_type, 'agent_document'))
       return
     }
     setParseDocId(docId)
@@ -303,8 +384,10 @@ export default function DocumentsPage() {
   // Trigger parse with prompt
   const handleParse = async () => {
     if (!parseDocId) return
+    const parseDoc = allDocs.find(doc => doc.id === parseDocId)
+    const parseMeta = docHistoryMeta(parseDocName, parseDoc?.doc_type, 'agent_document')
     if (runningParseDocIds.has(parseDocId)) {
-      toast.error(t('parseTaskAlreadyRunning'))
+      toast.error(t('parseTaskAlreadyRunning'), parseMeta)
       setParseDocId(null)
       return
     }
@@ -321,14 +404,23 @@ export default function DocumentsPage() {
         : ''
       const promptForParse = [parsePrompt.trim(), knowledgePrompt].filter(Boolean).join('\n\n')
       const res = await docsApi.triggerParse(parseDocId, promptForParse || undefined)
-      const promptInfo = promptForParse ? `（使用提示词）` : ''
-      toast.success(res.data.message || `${t('parseQueued')}${promptInfo}`)
+      const taskId = res.data?.agent_task_id
+      if (res.data?.already_running) {
+        toast.error(t('parseTaskAlreadyRunning'), parseMeta)
+      } else if (taskId) {
+        submittedParseTaskIdsRef.current.add(String(taskId))
+        parseTaskStatusRef.current[String(taskId)] = String(res.data?.status || 'queued')
+        toast.success(
+          t('parseQueued', { name: parseDocName }),
+          notificationHistoryMeta({ category: 'task_submission', type_name: t('agentRunCategoryFileParse'), object_name: parseDocName }),
+        )
+      }
       qc.invalidateQueries({ queryKey: ['docs', caseId] })
       qc.invalidateQueries({ queryKey: ['facts', caseId] })
       qc.invalidateQueries({ queryKey: ['agentTasks', caseId] })
       setParseDocId(null)
     } catch (e: any) {
-      toast.error(`${readableLlmError(e, i18n.language, 'parse')}：${parseDocName}`)
+      toast.error(`${readableLlmError(e, i18n.language, 'parse')}：${parseDocName}`, parseMeta)
     }
     finally { setParsing(false) }
   }
@@ -349,27 +441,30 @@ export default function DocumentsPage() {
   }[type] || t('itemKnowledge'))
 
   const deleteDoc = async (docId: string) => {
+    const meta = docActionMeta(docId)
     try {
       await docsApi.softDelete(docId)
-      toast.success(t('movedToTrash'))
+      toast.success(t('movedToTrash'), meta)
       qc.invalidateQueries({ queryKey: ['docs', caseId] })
-    } catch { toast.error('删除失败') }
+    } catch { toast.error('删除失败', meta) }
   }
 
   const restoreDoc = async (docId: string) => {
+    const meta = docActionMeta(docId)
     try {
       await docsApi.restore(docId)
-      toast.success('已恢复')
+      toast.success('已恢复', meta)
       qc.invalidateQueries({ queryKey: ['docs', caseId] })
-    } catch { toast.error('恢复失败') }
+    } catch { toast.error('恢复失败', meta) }
   }
 
   const permanentDeleteDoc = async (docId: string) => {
+    const meta = docActionMeta(docId)
     try {
       await docsApi.permanentDelete(docId)
-      toast.success('已彻底删除')
+      toast.success('已彻底删除', meta)
       qc.invalidateQueries({ queryKey: ['docs', caseId] })
-    } catch { toast.error('删除失败') }
+    } catch { toast.error('删除失败', meta) }
   }
 
   const confirmDocumentAction = async () => {
@@ -407,6 +502,8 @@ export default function DocumentsPage() {
   }
 
   const exportDocText = async (docId: string, filename: string) => {
+    const doc = [...allDocs, ...trashDocs].find(item => item.id === docId)
+    const meta = docHistoryMeta(filename, doc?.doc_type)
     try {
       const res = await docsApi.exportText(docId, 'txt')
       const downloadName = filenameFromDisposition(
@@ -415,22 +512,24 @@ export default function DocumentsPage() {
       )
       const contentType = typeof res.headers['content-type'] === 'string' ? res.headers['content-type'] : undefined
       saveBlob(res.data, downloadName, contentType)
-      toast.success(t('exportedParsedText', { name: filename }))
+      toast.success(t('exportedParsedText', { name: filename }), meta)
     } catch {
-      toast.error(t('exportFailed'))
+      toast.error(t('exportFailed'), meta)
     }
   }
 
   const downloadDoc = async (docId: string, filename: string) => {
+    const doc = [...allDocs, ...trashDocs].find(item => item.id === docId)
+    const meta = docHistoryMeta(filename, doc?.doc_type)
     try {
       const res = await docsApi.download(docId)
       const downloadName = filenameFromDisposition(res.headers['content-disposition'], filename)
       const contentType = typeof res.headers['content-type'] === 'string' ? res.headers['content-type'] : undefined
       saveBlob(res.data, downloadName, contentType)
-      toast.success(t('downloadedFile', { name: downloadName }))
+      toast.success(t('downloadedFile', { name: downloadName }), meta)
     } catch (e: any) {
       const detail = e?.response?.data?.detail
-      toast.error(detail || t('downloadFailed'))
+      toast.error(detail || t('downloadFailed'), meta)
     }
   }
 
@@ -555,7 +654,7 @@ export default function DocumentsPage() {
                     <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('filename')}>{t('filename')}{sortIndicator('filename')}</th>
                     <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('doc_type')}>{t('type')}{sortIndicator('doc_type')}</th>
                     <th>{t('parseStatus')}</th>
-                    <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('created_at')}>{t('time')}{sortIndicator('created_at')}</th>
+                    <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('updated_at')}>{t('time')}{sortIndicator('updated_at')}</th>
                     <th>{t('actions')}</th>
                   </tr>
                 </thead>
@@ -579,7 +678,7 @@ export default function DocumentsPage() {
                         {renderParseDiagnostics(d)}
                       </td>
                       <td className="document-time-cell">
-                        <div>{t('updatedAt')}: {formatLocalDateTime(d.updated_at || d.created_at, i18n.language)}</div>
+                        <div>{t('updatedAt')}: {formatLocalDateTime(documentDisplayTime(d), i18n.language)}</div>
                       </td>
                       <td>
                         <div className="document-action-row">

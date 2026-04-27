@@ -9,6 +9,7 @@ import {
 import { adminApi } from '../api'
 import { useAuthStore } from '../store/auth'
 import { formatLocalDateTime } from '../utils/time'
+import { notificationHistoryMeta } from '../utils/notificationHistory'
 
 type AdminUser = {
   id: string
@@ -184,6 +185,22 @@ export default function AdminPage() {
   const totalUsers = usersRes?.data?.total ?? 0
   const cases: AdminCase[] = casesRes?.data?.items ?? []
   const totalCases = casesRes?.data?.total ?? 0
+  const userDisplayName = (user?: AdminUser | null) => {
+    if (!user) return '用户'
+    return user.name ? `${user.name}（${user.email}）` : user.email
+  }
+  const adminUserMeta = (user?: AdminUser | null) => notificationHistoryMeta({
+    category: 'account_system',
+    type_name: '用户',
+    object_name: userDisplayName(user),
+  })
+  const adminCaseMeta = (item?: AdminCase | null) => notificationHistoryMeta({
+    category: 'case_task',
+    type_name: item?.case_type || '案件',
+    object_name: item?.title || '案件',
+  })
+  const findAdminUser = (id: string) => users.find(user => user.id === id)
+  const findAdminCase = (id: string) => cases.find(item => item.id === id)
 
   useEffect(() => {
     const totalPages = Math.max(1, Math.ceil(totalUsers / ADMIN_PAGE_SIZE))
@@ -198,43 +215,43 @@ export default function AdminPage() {
   const updateUserMutation = useMutation({
     mutationFn: ({ id, patch }: { id: string; patch: { is_active?: boolean; is_system_admin?: boolean } }) =>
       adminApi.updateUser(id, patch),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['admin-overview'] })
       queryClient.invalidateQueries({ queryKey: ['admin-users'] })
-      toast.success('已更新用户')
+      toast.success('已更新用户', adminUserMeta(findAdminUser(variables.id)))
     },
-    onError: (err: any) => toast.error(err?.response?.data?.detail || '更新失败'),
+    onError: (err: any, variables) => toast.error(err?.response?.data?.detail || '更新失败', adminUserMeta(findAdminUser(variables.id))),
   })
   const deleteCaseMutation = useMutation({
     mutationFn: (id: string) => adminApi.deleteCase(id),
-    onSuccess: (res) => {
+    onSuccess: (res, id) => {
       queryClient.invalidateQueries({ queryKey: ['admin-overview'] })
       queryClient.invalidateQueries({ queryKey: ['admin-cases'] })
       queryClient.invalidateQueries({ queryKey: ['admin-users'] })
       const errors = res.data?.storage_errors?.length || 0
-      toast.success(errors ? `案件已删除，${errors} 个文件清理告警` : '案件及关联文件已删除')
+      toast.success(errors ? `案件已删除，${errors} 个文件清理告警` : '案件及关联文件已删除', adminCaseMeta(findAdminCase(id)))
     },
-    onError: (err: any) => toast.error(err?.response?.data?.detail || '删除案件失败'),
+    onError: (err: any, id) => toast.error(err?.response?.data?.detail || '删除案件失败', adminCaseMeta(findAdminCase(id))),
   })
   const deleteUserMutation = useMutation({
     mutationFn: (id: string) => adminApi.deleteUser(id),
-    onSuccess: (res) => {
+    onSuccess: (res, id) => {
       queryClient.invalidateQueries({ queryKey: ['admin-overview'] })
       queryClient.invalidateQueries({ queryKey: ['admin-cases'] })
       queryClient.invalidateQueries({ queryKey: ['admin-users'] })
       const errors = res.data?.storage_errors?.length || 0
-      toast.success(errors ? `用户已删除，${errors} 个文件清理告警` : '用户及关联文件已删除')
+      toast.success(errors ? `用户已删除，${errors} 个文件清理告警` : '用户及关联文件已删除', adminUserMeta(findAdminUser(id)))
     },
-    onError: (err: any) => toast.error(err?.response?.data?.detail || '删除用户失败'),
+    onError: (err: any, id) => toast.error(err?.response?.data?.detail || '删除用户失败', adminUserMeta(findAdminUser(id))),
   })
   const resetPasswordMutation = useMutation({
     mutationFn: ({ id, password, passwordConfirm }: { id: string; password: string; passwordConfirm: string }) =>
       adminApi.resetUserPassword(id, { new_password: password, new_password_confirm: passwordConfirm }),
-    onSuccess: () => {
-      toast.success('密码已重置')
+    onSuccess: (_data, variables) => {
+      toast.success('密码已重置', adminUserMeta(findAdminUser(variables.id) || passwordTarget))
       closePasswordModal()
     },
-    onError: (err: any) => toast.error(err?.response?.data?.detail || '重置密码失败'),
+    onError: (err: any, variables) => toast.error(err?.response?.data?.detail || '重置密码失败', adminUserMeta(findAdminUser(variables.id) || passwordTarget)),
   })
 
   const stats = [
@@ -281,11 +298,11 @@ export default function AdminPage() {
     e.preventDefault()
     if (!passwordTarget) return
     if (newPassword.length < 8) {
-      toast.error('新密码至少需要 8 位')
+      toast.error('新密码至少需要 8 位', adminUserMeta(passwordTarget))
       return
     }
     if (newPassword !== newPasswordConfirm) {
-      toast.error('两次输入的新密码不一致')
+      toast.error('两次输入的新密码不一致', adminUserMeta(passwordTarget))
       return
     }
     resetPasswordMutation.mutate({

@@ -6,6 +6,7 @@ import toast from 'react-hot-toast'
 import { CheckSquare, Clock, CheckCircle, FolderOpen, User, RotateCcw, Trash2, ArrowUpDown } from 'lucide-react'
 import { casesApi, tasksApi } from '../api'
 import { formatLocalDateTime } from '../utils/time'
+import { notificationHistoryMeta } from '../utils/notificationHistory'
 
 type CaseBasic = {
   id: string; title: string; case_type: string; status: string;
@@ -114,17 +115,32 @@ export default function GlobalTasksPage() {
 function CaseTaskSection({ caseInfo, tasks }: { caseInfo: CaseBasic; tasks: Task[] }) {
   const qc = useQueryClient()
   const { t, i18n } = useTranslation()
+  const taskHistoryMeta = (task?: Task) => notificationHistoryMeta({
+    category: 'case_task',
+    type_name: task?.task_type && taskTypeLabelKey[task.task_type] ? t(taskTypeLabelKey[task.task_type]) : caseInfo.title,
+    object_name: task?.title || caseInfo.title,
+  })
+  const taskMetaById = (id: string) => taskHistoryMeta(tasks.find(item => item.id === id))
   const completeMutation = useMutation({
     mutationFn: (id: string) => tasksApi.complete(id),
-    onSuccess: () => { toast.success(t('taskCompletedSuccess')); qc.invalidateQueries({ queryKey: ['tasks', caseInfo.id] }) },
+    onSuccess: (_data, id) => {
+      toast.success(t('taskCompletedSuccess'), taskMetaById(id))
+      qc.invalidateQueries({ queryKey: ['tasks', caseInfo.id] })
+    },
   })
   const reopenMutation = useMutation({
     mutationFn: (id: string) => tasksApi.updateStatus(id, 'pending'),
-    onSuccess: () => { toast.success(t('taskReopenedSuccess')); qc.invalidateQueries({ queryKey: ['tasks', caseInfo.id] }) },
+    onSuccess: (_data, id) => {
+      toast.success(t('taskReopenedSuccess'), taskMetaById(id))
+      qc.invalidateQueries({ queryKey: ['tasks', caseInfo.id] })
+    },
   })
   const deleteMutation = useMutation({
     mutationFn: (id: string) => tasksApi.softDelete(id),
-    onSuccess: () => { toast.success(t('taskDeletedSuccess')); qc.invalidateQueries({ queryKey: ['tasks', caseInfo.id] }) },
+    onSuccess: (_data, id) => {
+      toast.success(t('taskDeletedSuccess'), taskMetaById(id))
+      qc.invalidateQueries({ queryKey: ['tasks', caseInfo.id] })
+    },
   })
   const statusIcon = (s: string) => {
     if (s === 'completed') return <CheckCircle size={14} color="var(--success)" />

@@ -24,6 +24,22 @@ logger = logging.getLogger(__name__)
 redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
 
 SECTION_LOCK_TTL = 120  # seconds
+DEFAULT_DOCUMENT_TYPE_LABELS = {
+    "evidence": "证据材料",
+    "award": "获奖证明",
+    "original_contribution": "原创成果",
+    "patent": "专利",
+    "publication": "学术发表",
+    "citation": "引用数据",
+    "employment": "雇佣证明",
+    "media": "媒体报道",
+    "membership": "专业组织",
+    "resume": "个人简历",
+    "reference_letter": "推荐信",
+    "petition_letter": "申请信",
+    "rfi": "RFI 回复",
+    "other": "其他",
+}
 
 
 def _truncate_text(value: str | None, limit: int) -> str:
@@ -44,8 +60,9 @@ def _run_async(coro):
 def _get_db_session():
     from sqlalchemy import create_engine
     from sqlalchemy.orm import Session
-    sync_url = settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
-    engine = create_engine(sync_url)
+    from app.database import sync_database_url
+
+    engine = create_engine(sync_database_url())
     return engine, Session(engine)
 
 
@@ -118,6 +135,7 @@ def _invalidate_case_runtime_cache(case_id: str) -> None:
     delete_pattern_sync(f"facts:{case_id}:*")
     delete_pattern_sync(f"tasks:{case_id}:*")
     delete_pattern_sync(f"documents:{case_id}:*")
+    delete_pattern_sync(f"agent-tasks:{case_id}:*")
     delete_pattern_sync("admin:v1:*")
 
 
@@ -136,6 +154,86 @@ def _fact_to_prompt_dict(fact) -> dict:
         "structured_data": compact_structured,
         "confidence_score": fact.confidence_score,
     }
+
+
+def _fact_ref_title(fact) -> str:
+    content = _truncate_text(fact.content, 180)
+    return f"[{fact.category}] {content}" if content else f"[{fact.category}]"
+
+
+def _source_document_name(fact, documents_by_id: dict) -> str:
+    if fact.source_document_id and fact.source_document_id in documents_by_id:
+        doc = documents_by_id[fact.source_document_id]
+        return doc.original_filename or doc.filename
+    structured = dict(fact.structured_data or {})
+    return str(structured.get("document_name") or structured.get("source") or "未关联原始文件")
+
+
+def _source_document_type(fact, documents_by_id: dict, doc_type_labels: dict) -> str:
+    if fact.source_document_id and fact.source_document_id in documents_by_id:
+        doc_type = str(documents_by_id[fact.source_document_id].doc_type or "")
+        return str(doc_type_labels.get(doc_type) or DEFAULT_DOCUMENT_TYPE_LABELS.get(doc_type) or doc_type or "未知类型")
+    return "未知类型"
+
+
+def _draft_reference_payload(fact_rows: list, documents_by_id: dict, doc_type_labels: dict) -> tuple[list[dict], list[dict]]:
+    fact_refs: list[dict] = []
+    document_stats: dict[tuple[str, str], int] = {}
+    for index, fact in enumerate(fact_rows, 1):
+        structured = dict(fact.structured_data or {})
+        document_name = _source_document_name(fact, documents_by_id)
+        document_type = _source_document_type(fact, documents_by_id, doc_type_labels)
+        document_stats[(document_name, document_type)] = document_stats.get((document_name, document_type), 0) + 1
+        ref = {
+            "title": f"{index}. {_fact_ref_title(fact)}",
+            "source_document": document_name,
+            "document_type": document_type,
+            "confidence": round(float(fact.confidence_score or 0), 3),
+            "status": _status_value(fact.status),
+        }
+        quote = structured.get("quote")
+        page = structured.get("page")
+        if quote:
+            ref["quote"] = _truncate_text(str(quote), 260)
+        if page:
+            ref["page"] = str(page)
+        fact_refs.append(ref)
+
+    document_refs = [
+        {
+            "title": f"{name}（{doc_type}，引用事实 {count} 条）",
+            "name": name,
+            "document_type": doc_type,
+            "fact_count": count,
+        }
+        for (name, doc_type), count in sorted(document_stats.items(), key=lambda item: item[0][0])
+    ]
+    return fact_refs, document_refs
+
+
+def _format_draft_reference_appendix(fact_refs: list[dict], document_refs: list[dict]) -> str:
+    if not fact_refs and not document_refs:
+        return ""
+    lines = [
+        "---",
+        "生成依据 / 溯源追踪（供律师审核，可在定稿前删除）",
+        "",
+    ]
+    if document_refs:
+        lines.append("引用文件：")
+        for item in document_refs:
+            lines.append(f"- {item['name']}（{item['document_type']}，引用事实 {item['fact_count']} 条）")
+        lines.append("")
+    if fact_refs:
+        lines.append("引用事实：")
+        for item in fact_refs:
+            lines.append(f"- {item['title']}")
+            lines.append(f"  来源文件：{item['source_document']}（{item['document_type']}）")
+            if item.get("page"):
+                lines.append(f"  页码/位置：{item['page']}")
+            if item.get("quote"):
+                lines.append(f"  原文摘录：{item['quote']}")
+    return "\n".join(lines)
 
 
 def _truncate_source_text(text: str, max_chars: int = 12000) -> str:
@@ -321,6 +419,7 @@ def generate_drafts(self, case_id: str, agent_task_id: str):
     from app.models.draft import DraftRevision, DraftSection, SectionStatus
     from app.models.agent_task import AgentTask
     from app.models.case import Case
+    from app.models.document import Document
     from app.models.organization import Organization
     from app.models.knowledge import KnowledgeItem
     from app.agents.draft_generator import DraftGenerationAgent
@@ -353,9 +452,14 @@ def generate_drafts(self, case_id: str, agent_task_id: str):
             strategy = input_params.get("strategy", "strongest_first")
             knowledge_ids = input_params.get("knowledge_ids", [])
             fact_ids = input_params.get("fact_ids", [])
+            doc_type_labels = {
+                **DEFAULT_DOCUMENT_TYPE_LABELS,
+                **(input_params.get("doc_type_labels") or {}),
+            }
             knowledge_ids = knowledge_ids[: settings.DRAFT_MAX_KNOWLEDGE_ITEMS]
 
             # Fetch facts: specific IDs if provided, otherwise approved facts with a non-deleted fallback.
+            fact_rows = []
             if fact_ids:
                 facts_result = session.execute(
                     select(Fact).where(
@@ -364,6 +468,7 @@ def generate_drafts(self, case_id: str, agent_task_id: str):
                         Fact.is_deleted == False,
                     ).limit(settings.DRAFT_MAX_FACTS * 2)
                 )
+                fact_rows = facts_result.scalars().all()
             else:
                 facts_result = session.execute(
                     select(Fact).where(
@@ -374,8 +479,8 @@ def generate_drafts(self, case_id: str, agent_task_id: str):
                     .order_by(Fact.confidence_score.desc(), Fact.updated_at.desc())
                     .limit(settings.DRAFT_MAX_FACTS * 2)
                 )
-                facts = facts_result.scalars().all()
-                if not facts:
+                fact_rows = facts_result.scalars().all()
+                if not fact_rows:
                     facts_result = session.execute(
                         select(Fact).where(
                             Fact.case_id == uuid.UUID(case_id),
@@ -384,16 +489,27 @@ def generate_drafts(self, case_id: str, agent_task_id: str):
                         .order_by(Fact.confidence_score.desc(), Fact.updated_at.desc())
                         .limit(settings.DRAFT_MAX_FACTS * 2)
                     )
-                    facts = facts_result.scalars().all()
-                facts = [_fact_to_prompt_dict(f) for f in facts]
-            if fact_ids:
-                facts = [_fact_to_prompt_dict(f) for f in facts_result.scalars().all()]
+                    fact_rows = facts_result.scalars().all()
+            fact_rows = fact_rows[: settings.DRAFT_MAX_FACTS]
+            facts = [_fact_to_prompt_dict(f) for f in fact_rows]
 
             if not facts:
                 if agent_task:
                     _mark_failed(agent_task, {"error": "no facts", "case_id": case_id}, started_at, "no facts")
                     session.commit()
                 return {"error": "no facts", "case_id": case_id}
+
+            source_document_ids = {fact.source_document_id for fact in fact_rows if fact.source_document_id}
+            documents_by_id = {}
+            if source_document_ids:
+                doc_result = session.execute(
+                    select(Document).where(
+                        Document.case_id == uuid.UUID(case_id),
+                        Document.id.in_(source_document_ids),
+                    )
+                )
+                documents_by_id = {doc.id: doc for doc in doc_result.scalars().all()}
+            fact_refs, document_refs = _draft_reference_payload(fact_rows, documents_by_id, doc_type_labels)
 
             # Fetch knowledge items if specified
             knowledge_content = []
@@ -435,10 +551,15 @@ def generate_drafts(self, case_id: str, agent_task_id: str):
                 logger.info("agent_task_skip_released_after_llm type=generate_drafts task_id=%s case_id=%s", agent_task_id, case_id)
                 return {"case_id": case_id, "skipped": "agent task already released"}
             drafts = {"main": content}
+            draft_titles: list[str] = []
 
             # Persist each version as one full draft instead of splitting it into paragraph/section cards.
             for version, content in drafts.items():
                 title, body = _full_draft_from_content(content, draft_title=draft_title)
+                draft_titles.append(title)
+                reference_appendix = _format_draft_reference_appendix(fact_refs, document_refs)
+                if reference_appendix:
+                    body = body.rstrip() + "\n\n" + reference_appendix
                 section = DraftSection(
                     case_id=uuid.UUID(case_id),
                     section_order=1,
@@ -458,7 +579,12 @@ def generate_drafts(self, case_id: str, agent_task_id: str):
                     editor_role="agent",
                     editor_id=None,
                     change_summary="Initial AI generation",
-                    revision_metadata={"agent_task_id": agent_task_id, "history_ref_count": len(history_refs)},
+                    revision_metadata={
+                        "agent_task_id": agent_task_id,
+                        "history_ref_count": len(history_refs),
+                        "fact_refs": fact_refs,
+                        "document_refs": document_refs,
+                    },
                 ))
 
             # Mark agent task complete
@@ -466,7 +592,11 @@ def generate_drafts(self, case_id: str, agent_task_id: str):
                 agent_task,
                 {
                     "versions": list(drafts.keys()),
+                    "draft_name": draft_titles[0] if draft_titles else draft_title,
+                    "draft_titles": draft_titles,
                     "fact_count": len(facts),
+                    "fact_refs": fact_refs,
+                    "document_refs": document_refs,
                     "history_ref_count": len(history_refs),
                     "knowledge_ref_count": len(knowledge_content),
                 },

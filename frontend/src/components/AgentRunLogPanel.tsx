@@ -29,6 +29,7 @@ type Props = {
   title?: string
   compact?: boolean
   totalItems?: number
+  docTypeLabels?: Record<string, string>
 }
 
 const typeLabelKey: Record<string, string> = {
@@ -61,6 +62,30 @@ const statusClass = (status: string) => (
   status === 'completed' ? 'badge-green' : status === 'failed' ? 'badge-red' : status === 'processing' ? 'badge-blue' : 'badge-gray'
 )
 
+const docTypeLabelKey: Record<string, string> = {
+  evidence: 'docTypeEvidence',
+  award: 'docTypeAward',
+  original_contribution: 'docTypeOriginalContribution',
+  patent: 'docTypePatent',
+  publication: 'docTypePublication',
+  citation: 'docTypeCitation',
+  employment: 'docTypeEmployment',
+  media: 'docTypeMedia',
+  membership: 'docTypeMembership',
+  resume: 'docTypeResume',
+  reference_letter: 'docTypeReferenceLetter',
+  petition_letter: 'docTypePetitionLetter',
+  rfi: 'docTypeRfi',
+  other: 'docTypeOther',
+}
+
+const docTypeName = (value: unknown, t: (key: string) => string, docTypeLabels?: Record<string, string>) => {
+  const type = String(value || '').trim()
+  if (!type) return ''
+  if (docTypeLabels?.[type]) return docTypeLabels[type]
+  return docTypeLabelKey[type] ? t(docTypeLabelKey[type]) : type
+}
+
 const isPlainObject = (value: unknown): value is Record<string, any> => (
   Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 )
@@ -92,7 +117,13 @@ const readableListItems = (value: unknown, language: string): string[] => {
   if (Array.isArray(value)) {
     return value
       .map(item => {
-        if (isPlainObject(item)) return item.title || item.name || item.label || item.content || stringifyValue(item, language)
+        if (isPlainObject(item)) {
+          const title = item.title || item.name || item.label || item.content
+          const source = item.source_document
+            ? `${language === 'zh' ? '来源文件' : 'Source'}：${item.source_document || '-'}${item.document_type ? `（${item.document_type}）` : ''}`
+            : ''
+          return [title, source].filter(Boolean).join('\n  ') || stringifyValue(item, language)
+        }
         return String(item)
       })
       .map(item => String(item).trim())
@@ -103,12 +134,13 @@ const readableListItems = (value: unknown, language: string): string[] => {
   return [text]
 }
 
-function renderDetailValue(key: string, value: unknown, language: string) {
-  if (key === 'fact_titles') {
+function renderDetailValue(key: string, value: unknown, language: string, t: (key: string) => string, docTypeLabels?: Record<string, string>) {
+  if (key === 'fact_titles' || key === 'fact_refs' || key === 'document_refs') {
     const items = readableListItems(value, language)
     if (items.length === 0) return <pre>{language === 'zh' ? '无' : 'None'}</pre>
     return <pre>{items.join('\n')}</pre>
   }
+  if (key === 'doc_type') return <pre>{docTypeName(value, t, docTypeLabels) || stringifyValue(value, language)}</pre>
   return <pre>{stringifyValue(value, language)}</pre>
 }
 
@@ -116,6 +148,8 @@ const shortValue = (value: unknown, language: string, limit = 180): string => {
   const text = stringifyValue(value, language)
   return text.length > limit ? `${text.slice(0, limit).trim()}...` : text
 }
+
+const compactText = (value: unknown, language: string, limit = 120) => shortValue(value, language, limit)
 
 const pickRows = (payload: Record<string, any>, keys: string[]) => (
   keys
@@ -136,6 +170,8 @@ const zhLabels: Record<string, string> = {
   warning: '告警',
   fact_title: '事实',
   fact_titles: '相关事实',
+  fact_refs: '引用事实',
+  document_refs: '引用文件',
   fact_category: '事实分类',
   comment: '异议意见',
   comment_chars: '异议长度',
@@ -160,7 +196,6 @@ const zhLabels: Record<string, string> = {
   chunk_count: '分块数',
   coverage_score: '覆盖率',
   potential_gap_count: '潜在遗漏',
-  mime_type: '文件格式',
   case_title: '案件',
 }
 
@@ -177,6 +212,8 @@ const enLabels: Record<string, string> = {
   warning: 'Warning',
   fact_title: 'Fact',
   fact_titles: 'Related facts',
+  fact_refs: 'Referenced facts',
+  document_refs: 'Referenced documents',
   fact_category: 'Fact category',
   comment: 'Dispute comment',
   comment_chars: 'Comment length',
@@ -201,7 +238,6 @@ const enLabels: Record<string, string> = {
   chunk_count: 'Chunks',
   coverage_score: 'Coverage',
   potential_gap_count: 'Potential gaps',
-  mime_type: 'MIME type',
   case_title: 'Case',
 }
 
@@ -213,23 +249,23 @@ function labelFor(key: string, language: string) {
 function detailKeys(taskType: string, section: 'input' | 'output') {
   if (taskType === 'fact_extract') {
     return section === 'input'
-      ? ['document_name', 'doc_type', 'case_type', 'mime_type', 'prompt_chars', 'prompt']
-      : ['facts_extracted', 'fact_categories', 'warning', 'diagnostics']
+      ? ['prompt']
+      : ['warning', 'diagnostics']
   }
   if (taskType === 'fact_reparse') {
     return section === 'input'
-      ? ['fact_title', 'fact_category', 'comment', 'knowledge_refs', 'original_content']
-      : ['source_document', 'reparse_source', 'knowledge_ref_count', 'fallback_used', 'llm_error', 'original_content', 'new_content']
+      ? ['comment']
+      : ['fallback_used', 'llm_error']
   }
   if (taskType === 'draft_generate') {
     return section === 'input'
-      ? ['title', 'strategy_name', 'prompt', 'knowledge_refs', 'fact_titles']
-      : ['versions', 'fact_count', 'knowledge_ref_count', 'history_ref_count']
+      ? ['prompt']
+      : ['versions', 'fact_count', 'fact_refs', 'document_refs', 'knowledge_ref_count', 'history_ref_count']
   }
   if (taskType === 'rewrite_section') {
     return section === 'input'
-      ? ['section_title', 'instruction', 'strategy_name', 'knowledge_refs', 'fact_titles']
-      : ['section_title', 'strategy_name', 'knowledge_ref_count', 'history_ref_count']
+      ? ['instruction']
+      : ['knowledge_ref_count', 'history_ref_count']
   }
   return section === 'input' ? Object.keys({}) : Object.keys({})
 }
@@ -251,7 +287,6 @@ function readablePayload(task: AgentTask, section: 'input' | 'output'): Record<s
         document_name: document.name || input.document_name,
         doc_type: document.type || input.doc_type,
         case_type: input.case_type,
-        mime_type: input.mime_type,
         prompt_chars: input.prompt_chars,
         prompt: input.prompt,
       }
@@ -300,38 +335,52 @@ function readablePayload(task: AgentTask, section: 'input' | 'output'): Record<s
   return section === 'input' ? input : output
 }
 
-function summaryChips(task: AgentTask, language: string) {
+function businessObject(task: AgentTask, language: string, t: (key: string) => string, docTypeLabels?: Record<string, string>) {
   const summary = task.summary || {}
   const output = task.output_result || {}
   const input = task.input_params || {}
   const human = task.human_context || {}
-  const merged: Record<string, any> = {
-    case_title: task.case_title,
-    case_type: task.case_type,
-    ...input,
-    ...summary,
-    ...output,
-    document_name: human.document?.name || summary.document_name || output.document_name || input.document_name,
-    source_document: human.source_document?.name || output.source_document,
-    fact_title: human.fact?.title,
-    section_title: human.section?.title,
-    strategy_name: human.strategy_name || summary.strategy || input.strategy || output.strategy,
+  const document = human.document || {}
+  const fact = human.fact || {}
+  const sectionInfo = human.section || {}
+  const caseType = compactText(task.case_type || input.case_type || output.case_type || '-', language, 40)
+
+  if (task.task_type === 'fact_extract') {
+    return {
+      typeName: docTypeName(document.type || summary.doc_type || output.doc_type || input.doc_type, t, docTypeLabels) || t('agentTaskFactExtract'),
+      objectName: compactText(document.name || summary.document_name || output.document_name || input.document_name || t('itemDocument'), language),
+      caseType,
+    }
   }
-  const keys = task.task_type === 'fact_extract'
-    ? ['case_title', 'document_name', 'doc_type', 'facts_extracted', 'text_quality', 'chunk_count', 'potential_gap_count', 'warning']
-    : task.task_type === 'fact_reparse'
-      ? ['case_title', 'fact_title', 'source_document', 'knowledge_ref_count', 'source_text_chars', 'fallback_used']
-      : task.task_type === 'draft_generate'
-        ? ['case_title', 'title', 'strategy_name', 'fact_count', 'knowledge_ref_count']
-        : task.task_type === 'rewrite_section'
-          ? ['case_title', 'section_title', 'strategy_name', 'knowledge_ref_count', 'history_ref_count']
-          : Object.keys(summary).slice(0, 4)
-  return keys
-    .filter(key => merged[key] !== undefined && merged[key] !== null && merged[key] !== '')
-    .map(key => ({ label: labelFor(key, language), value: shortValue(merged[key], language, 72) }))
+  if (task.task_type === 'fact_reparse') {
+    return {
+      typeName: compactText(fact.category || summary.fact_category || input.fact_category || t('agentTaskFactReparse'), language, 56),
+      objectName: compactText(fact.content || fact.title || input.original_content || output.original_content || t('itemFact'), language),
+      caseType,
+    }
+  }
+  if (task.task_type === 'draft_generate') {
+    return {
+      typeName: t('agentTaskDraftGenerate'),
+      objectName: compactText(input.title || summary.title || t('aiDraftGeneration'), language),
+      caseType,
+    }
+  }
+  if (task.task_type === 'rewrite_section') {
+    return {
+      typeName: t('agentTaskRewriteSection'),
+      objectName: compactText(sectionInfo.title || output.section_title || summary.section_title || t('agentTaskRewriteSection'), language),
+      caseType,
+    }
+  }
+  return {
+    typeName: typeLabelKey[task.task_type] ? t(typeLabelKey[task.task_type]) : task.task_type,
+    objectName: compactText(input.title || output.title || summary.title || task.case_title || '-', language),
+    caseType,
+  }
 }
 
-export function AgentRunLogPanel({ tasks, maxItems = 8, title, compact = false, totalItems }: Props) {
+export function AgentRunLogPanel({ tasks, maxItems = 8, title, compact = false, totalItems, docTypeLabels }: Props) {
   const { t, i18n } = useTranslation()
   const language = i18n.language
   const visibleTasks = useMemo(() => tasks.slice(0, maxItems), [tasks, maxItems])
@@ -373,34 +422,42 @@ export function AgentRunLogPanel({ tasks, maxItems = 8, title, compact = false, 
           const expanded = expandedIds.has(task.id)
           const inputRows = pickRows(readablePayload(task, 'input'), detailKeys(task.task_type, 'input'))
           const outputRows = pickRows(readablePayload(task, 'output'), detailKeys(task.task_type, 'output'))
-          const chips = summaryChips(task, language)
+          const object = businessObject(task, language, t, docTypeLabels)
           return (
             <div key={task.id} className="agent-run-task">
               <button className="agent-run-task-main" onClick={() => toggleExpanded(task.id)} type="button">
                 <span className="agent-run-task-icon">{statusIcon(task.status)}</span>
-                <span className="agent-run-task-name">
-                  {typeLabelKey[task.task_type] ? t(typeLabelKey[task.task_type]) : task.task_type}
+                <span className="agent-run-task-body">
+                  <span className="agent-run-title-row">
+                    <span className="agent-run-task-name">
+                      {typeLabelKey[task.task_type] ? t(typeLabelKey[task.task_type]) : task.task_type}
+                    </span>
+                    <span className={`badge ${statusClass(task.status)}`}>
+                      {statusLabelKey[task.status] ? t(statusLabelKey[task.status]) : task.status}
+                    </span>
+                    {task.llm_model && <span className="agent-run-meta">{task.llm_model}</span>}
+                  </span>
+                  <span className="agent-run-object-row">
+                    <span>
+                      <span>{t('notificationTypeName')}</span>
+                      <strong>{object.typeName}</strong>
+                    </span>
+                    <span>
+                      <span>{t('notificationObjectName')}</span>
+                      <strong>{object.objectName}</strong>
+                    </span>
+                    <span>
+                      <span>{labelFor('case_type', language)}</span>
+                      <strong>{object.caseType}</strong>
+                    </span>
+                  </span>
                 </span>
-                <span className={`badge ${statusClass(task.status)}`}>
-                  {statusLabelKey[task.status] ? t(statusLabelKey[task.status]) : task.status}
-                </span>
-                {task.llm_model && <span className="agent-run-meta">{task.llm_model}</span>}
                 <span className="agent-run-time">
                   {task.latency_ms ? `${Math.round(task.latency_ms / 1000)}s · ` : ''}
                   {formatLocalDateTime(task.updated_at || task.created_at, language)}
                 </span>
                 {expanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
               </button>
-
-              {chips.length > 0 && (
-                <div className="agent-run-chip-row">
-                  {chips.map(chip => (
-                    <span key={`${task.id}-${chip.label}`} className="agent-run-chip">
-                      {chip.label}: {chip.value}
-                    </span>
-                  ))}
-                </div>
-              )}
 
               {task.status === 'failed' && task.error_message && (
                 <div className="agent-run-error">{task.error_message}</div>
@@ -409,25 +466,25 @@ export function AgentRunLogPanel({ tasks, maxItems = 8, title, compact = false, 
               {expanded && !compact && (
                 <div className="agent-run-detail-grid">
                   <div className="agent-run-detail-block">
-                    <div className="agent-run-detail-title">{language === 'zh' ? '输入' : 'Input'}</div>
+                    <div className="agent-run-detail-title">{language === 'zh' ? '提示内容' : 'Prompt'}</div>
                     {inputRows.length === 0 ? (
-                      <div className="agent-run-empty">{language === 'zh' ? '无可展示输入' : 'No input details'}</div>
+                      <div className="agent-run-empty">{language === 'zh' ? '无提示内容' : 'No prompt details'}</div>
                     ) : inputRows.map(row => (
                       <div key={row.key} className="agent-run-detail-row">
                         <span>{labelFor(row.key, language)}</span>
-                        {renderDetailValue(row.key, row.value, language)}
+                        {renderDetailValue(row.key, row.value, language, t, docTypeLabels)}
                       </div>
                     ))}
                   </div>
 
                   <div className="agent-run-detail-block">
-                    <div className="agent-run-detail-title">{language === 'zh' ? '结果与诊断' : 'Result and Diagnostics'}</div>
+                    <div className="agent-run-detail-title">{language === 'zh' ? '诊断' : 'Diagnostics'}</div>
                     {outputRows.length === 0 ? (
-                      <div className="agent-run-empty">{language === 'zh' ? '任务尚未产生结果' : 'No result yet'}</div>
+                      <div className="agent-run-empty">{language === 'zh' ? '暂无诊断信息' : 'No diagnostics yet'}</div>
                     ) : outputRows.map(row => (
                       <div key={row.key} className="agent-run-detail-row">
                         <span>{labelFor(row.key, language)}</span>
-                        {renderDetailValue(row.key, row.value, language)}
+                        {renderDetailValue(row.key, row.value, language, t, docTypeLabels)}
                       </div>
                     ))}
                   </div>

@@ -14,6 +14,7 @@ import type { AgentTask } from '../components/AgentRunLogPanel'
 import { ConfirmActionKind, ConfirmActionModal, ObjectLifecycleActions } from '../components/ObjectLifecycleActions'
 import { formatLocalDateTime } from '../utils/time'
 import { readableLlmError } from '../utils/llmError'
+import { notificationHistoryMeta } from '../utils/notificationHistory'
 
 const CAT_COLORS: Record<string, string> = {
   award: '#f0c060', patent: '#60a5fa', publication: '#34d399',
@@ -60,6 +61,9 @@ export default function FactsPage() {
   const [translatingId, setTranslatingId] = useState<string | null>(null)
   const [translationFact, setTranslationFact] = useState<TranslationState | null>(null)
   const translationCache = useRef<Map<string, string>>(new Map())
+  const factTaskStatusRef = useRef<Record<string, string>>({})
+  const submittedFactTaskIdsRef = useRef<Set<string>>(new Set())
+  const notifiedFactTaskIdsRef = useRef<Set<string>>(new Set())
 
   // Active facts
   const { data, isLoading } = useQuery({
@@ -91,6 +95,12 @@ export default function FactsPage() {
   // Group categories for filter
   const categories = [...new Set(displayFacts.map(f => f.category))]
   const disputeFact = displayFacts.find(f => f.id === disputeId) || allFacts.find(f => f.id === disputeId)
+  const findFactById = (id: string) => [...allFacts, ...trashFacts].find(f => f.id === id)
+  const factHistoryMeta = (fact?: any, category: 'fact' | 'agent_fact' | 'translation' = 'fact') => notificationHistoryMeta({
+    category,
+    type_name: fact?.category || t('agentRunCategoryFactReparse'),
+    object_name: fact?.content?.substring(0, 120) || t('itemFact'),
+  })
 
   const { data: disputeKnowledgeData } = useQuery({
     queryKey: ['knowledge', 'fact-reparse'],
@@ -127,12 +137,46 @@ export default function FactsPage() {
     qc.invalidateQueries({ queryKey: ['facts', caseId] })
   }, [caseId, factTaskSignature, qc])
 
+  useEffect(() => {
+    factAgentTasks
+      .filter(task => task.task_type === 'fact_reparse')
+      .forEach(task => {
+        const taskId = String(task.id)
+        const previousStatus = factTaskStatusRef.current[taskId]
+        const isTerminal = task.status === 'completed' || task.status === 'failed'
+        const wasSubmittedHere = submittedFactTaskIdsRef.current.has(taskId)
+        const shouldNotify = isTerminal && !notifiedFactTaskIdsRef.current.has(taskId) && (
+          wasSubmittedHere || (previousStatus && previousStatus !== task.status)
+        )
+        if (shouldNotify) {
+          const factTitle = String(
+            task.human_context?.fact?.title ||
+            task.output_result?.fact_content ||
+            task.input_params?.original_content ||
+            t('itemFact'),
+          ).substring(0, 120)
+          const factCategory = String(task.human_context?.fact?.category || task.input_params?.fact_category || t('agentRunCategoryFactReparse'))
+          const meta = notificationHistoryMeta({ category: 'agent_fact', type_name: factCategory, object_name: factTitle })
+          if (task.status === 'completed') {
+            toast.success(t('factReparseCompletedToast', { name: factTitle }), meta)
+          } else {
+            const reason = task.error_message || task.output_result?.error || ''
+            const reasonPrefix = i18n.language.startsWith('zh') ? '：' : ': '
+            toast.error(t('factReparseFailedToast', { name: factTitle, reason: reason ? `${reasonPrefix}${reason}` : '' }), meta)
+          }
+          notifiedFactTaskIdsRef.current.add(taskId)
+          submittedFactTaskIdsRef.current.delete(taskId)
+        }
+        factTaskStatusRef.current[taskId] = task.status
+      })
+  }, [factTaskSignature, i18n.language])
+
   const approveMutation = useMutation({
     mutationFn: (id: string) => factsApi.approve(id),
     onSuccess: (_data, id) => {
       const fact = displayFacts.find(f => f.id === id)
       const wasApproved = fact?.status === 'lawyer_approved'
-      toast.success(wasApproved ? t('factUnapproved') : t('confirmed'))
+      toast.success(wasApproved ? t('factUnapproved') : t('confirmed'), factHistoryMeta(fact))
       qc.invalidateQueries({ queryKey: ['facts', caseId] })
     },
   })
@@ -141,7 +185,11 @@ export default function FactsPage() {
     mutationFn: ({ id, comment, knowledgeIds }: { id: string; comment: string; knowledgeIds: string[] }) =>
       factsApi.dispute(id, comment, knowledgeIds),
     onSuccess: (res) => {
-      toast.success(res.data?.message || t('factDisputeReparseQueued'))
+      const taskId = res.data?.agent_task_id
+      if (taskId) {
+        submittedFactTaskIdsRef.current.add(String(taskId))
+        factTaskStatusRef.current[String(taskId)] = String(res.data?.status || 'queued')
+      }
       qc.invalidateQueries({ queryKey: ['facts', caseId] })
       qc.invalidateQueries({ queryKey: ['agentTasks', caseId] })
       setDisputeId(null)
@@ -150,7 +198,7 @@ export default function FactsPage() {
       setDisputeKnowledgeSearch('')
       setSelectedDisputeKnowledgeIds([])
     },
-    onError: (e: any) => toast.error(`${readableLlmError(e, i18n.language, 'parse')}：${disputeFact?.content?.substring(0, 120) || ''}`),
+    onError: (e: any) => toast.error(`${readableLlmError(e, i18n.language, 'parse')}：${disputeFact?.content?.substring(0, 120) || ''}`, factHistoryMeta(disputeFact, 'agent_fact')),
   })
 
   const disputeTaskMutation = useMutation({
@@ -162,7 +210,14 @@ export default function FactsPage() {
       })
     },
     onSuccess: () => {
-      toast.success(t('evidenceTaskSubmitted'))
+      toast.success(
+        t('evidenceTaskSubmitted'),
+        notificationHistoryMeta({
+          category: 'case_task',
+          type_name: t('requestEvidence'),
+          object_name: disputeFact?.content?.substring(0, 120) || t('itemFact'),
+        }),
+      )
       qc.invalidateQueries({ queryKey: ['tasks', caseId] })
       setDisputeId(null)
       setReparseDialogId(null)
@@ -174,17 +229,26 @@ export default function FactsPage() {
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => factsApi.softDelete(id),
-    onSuccess: () => { toast.success(t('movedToTrash')); qc.invalidateQueries({ queryKey: ['facts', caseId] }) },
+    onSuccess: (_data, id) => {
+      toast.success(t('movedToTrash'), factHistoryMeta(findFactById(id) || { content: confirmAction?.name }))
+      qc.invalidateQueries({ queryKey: ['facts', caseId] })
+    },
   })
 
   const restoreMutation = useMutation({
     mutationFn: (id: string) => factsApi.restore(id),
-    onSuccess: () => { toast.success(t('restored')); qc.invalidateQueries({ queryKey: ['facts', caseId] }) },
+    onSuccess: (_data, id) => {
+      toast.success(t('restored'), factHistoryMeta(findFactById(id) || { content: confirmAction?.name }))
+      qc.invalidateQueries({ queryKey: ['facts', caseId] })
+    },
   })
 
   const permanentDeleteMutation = useMutation({
     mutationFn: (id: string) => factsApi.permanentDelete(id),
-    onSuccess: () => { toast.success(t('permanentlyDeleted')); qc.invalidateQueries({ queryKey: ['facts', caseId] }) },
+    onSuccess: (_data, id) => {
+      toast.success(t('permanentlyDeleted'), factHistoryMeta(findFactById(id) || { content: confirmAction?.name }))
+      qc.invalidateQueries({ queryKey: ['facts', caseId] })
+    },
   })
 
   const confirmFactAction = async () => {
@@ -200,13 +264,17 @@ export default function FactsPage() {
   }
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, content }: { id: string; content: string }) => factsApi.update(id, { content }),
-    onSuccess: () => { toast.success(t('saved')); qc.invalidateQueries({ queryKey: ['facts', caseId] }); setEditId(null) },
+    mutationFn: ({ id, content }: { id: string; content: string; sourceTitle?: string }) => factsApi.update(id, { content }),
+    onSuccess: (_data, variables) => {
+      toast.success(t('saved'), factHistoryMeta(findFactById(variables.id) || { content: variables.sourceTitle || variables.content }))
+      qc.invalidateQueries({ queryKey: ['facts', caseId] })
+      setEditId(null)
+    },
   })
 
   const translateFactContent = async (id: string, title: string, original: string, targetLang: 'en' | 'zh') => {
     if (!original.trim()) {
-      toast.error(t('nothingToTranslate'))
+      toast.error(t('nothingToTranslate'), factHistoryMeta({ category: t('translate'), content: title }, 'translation'))
       return
     }
 
@@ -237,7 +305,7 @@ export default function FactsPage() {
           ? { ...current, loading: false, error: message }
           : current
       ))
-      toast.error(message)
+      toast.error(message, factHistoryMeta({ category: t('translate'), content: title }, 'translation'))
     } finally {
       setTranslatingId(null)
     }
@@ -248,6 +316,7 @@ export default function FactsPage() {
     await updateMutation.mutateAsync({
       id: translationFact.id,
       content: translationFact.content,
+      sourceTitle: translationFact.title,
     })
     setTranslationFact(null)
   }
@@ -270,8 +339,9 @@ export default function FactsPage() {
 
   const openReparseDialog = (factId: string) => {
     if (!disputeComment.trim()) return
+    const fact = displayFacts.find(item => item.id === factId) || allFacts.find(item => item.id === factId)
     if (runningFactReparseIds.has(factId)) {
-      toast.error(t('factReparseTaskAlreadyRunning'))
+      toast.error(t('factReparseTaskAlreadyRunning'), factHistoryMeta(fact, 'agent_fact'))
       return
     }
     setReparseDialogId(factId)
@@ -301,8 +371,9 @@ export default function FactsPage() {
 
   const submitDisputeReparse = () => {
     if (!reparseDialogId || !disputeComment.trim()) return
+    const fact = displayFacts.find(item => item.id === reparseDialogId) || allFacts.find(item => item.id === reparseDialogId)
     if (runningFactReparseIds.has(reparseDialogId)) {
-      toast.error(t('factReparseTaskAlreadyRunning'))
+      toast.error(t('factReparseTaskAlreadyRunning'), factHistoryMeta(fact, 'agent_fact'))
       closeReparseDialog()
       return
     }

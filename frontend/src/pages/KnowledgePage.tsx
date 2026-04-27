@@ -9,6 +9,7 @@ import {
 import { knowledgeApi } from '../api'
 import { ConfirmActionKind, ConfirmActionModal, ObjectLifecycleActions } from '../components/ObjectLifecycleActions'
 import { formatLocalDateTime } from '../utils/time'
+import { notificationHistoryMeta } from '../utils/notificationHistory'
 
 type KnowledgeItem = {
   id: string; title: string; content: string; item_type: string;
@@ -64,6 +65,17 @@ export default function KnowledgePage() {
     acc[type] = activeItems.filter(item => item.item_type === type).length
     return acc
   }, {})
+  const knowledgeTypeName = (type: string) => TYPE_META[type] ? t(TYPE_META[type].labelKey) : t('itemKnowledge')
+  const findKnowledgeById = (id: string) => [...rawItems, ...activeItems].find(item => item.id === id)
+  const knowledgeHistoryMeta = (title?: string, type = formType) => notificationHistoryMeta({
+    category: 'knowledge',
+    type_name: knowledgeTypeName(type),
+    object_name: title || t('itemKnowledge'),
+  })
+  const knowledgeActionMeta = (id: string, fallbackName?: string) => {
+    const item = findKnowledgeById(id)
+    return knowledgeHistoryMeta(fallbackName || item?.title || confirmAction?.name, item?.item_type || formType)
+  }
 
   useEffect(() => { setPage(1) }, [viewMode, filterType, searchTerm])
 
@@ -73,11 +85,11 @@ export default function KnowledgePage() {
       tags: formTags.split(',').map(t => t.trim()).filter(Boolean),
     }),
     onSuccess: () => {
-      toast.success(t('created'))
+      toast.success(t('created'), knowledgeHistoryMeta(formTitle, formType))
       qc.invalidateQueries({ queryKey: ['knowledge'] })
       resetForm()
     },
-    onError: (error: any) => toast.error(error?.response?.data?.detail || t('createFailed')),
+    onError: (error: any) => toast.error(error?.response?.data?.detail || t('createFailed'), knowledgeHistoryMeta(formTitle, formType)),
   })
 
   const updateMutation = useMutation({
@@ -86,7 +98,7 @@ export default function KnowledgePage() {
       tags: formTags.split(',').map(t => t.trim()).filter(Boolean),
     }),
     onSuccess: () => {
-      toast.success(t('saved'))
+      toast.success(t('saved'), knowledgeHistoryMeta(formTitle, formType))
       qc.invalidateQueries({ queryKey: ['knowledge'] })
       resetForm()
     },
@@ -94,24 +106,24 @@ export default function KnowledgePage() {
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => knowledgeApi.softDelete(id),
-    onSuccess: () => {
-      toast.success(t('movedToTrash'))
+    onSuccess: (_data, id) => {
+      toast.success(t('movedToTrash'), knowledgeActionMeta(id))
       qc.invalidateQueries({ queryKey: ['knowledge'] })
     },
   })
 
   const restoreMutation = useMutation({
     mutationFn: (id: string) => knowledgeApi.restore(id),
-    onSuccess: () => {
-      toast.success(t('restored'))
+    onSuccess: (_data, id) => {
+      toast.success(t('restored'), knowledgeActionMeta(id))
       qc.invalidateQueries({ queryKey: ['knowledge'] })
     },
   })
 
   const permanentDeleteMutation = useMutation({
     mutationFn: (id: string) => knowledgeApi.permanentDelete(id),
-    onSuccess: () => {
-      toast.success(t('permanentlyDeleted'))
+    onSuccess: (_data, id) => {
+      toast.success(t('permanentlyDeleted'), knowledgeActionMeta(id))
       qc.invalidateQueries({ queryKey: ['knowledge'] })
     },
   })

@@ -6,6 +6,7 @@ import toast from 'react-hot-toast'
 import { CheckSquare, Clock, CheckCircle, RotateCcw, Trash2, ArrowUpDown } from 'lucide-react'
 import { tasksApi } from '../api'
 import { formatLocalDateTime } from '../utils/time'
+import { notificationHistoryMeta } from '../utils/notificationHistory'
 
 type Task = {
   id: string; title: string; description: string; task_type: string;
@@ -48,25 +49,43 @@ export default function TasksPage() {
     const bv = new Date(b.updated_at || b.created_at || 0).getTime()
     return sortOrder === 'asc' ? av - bv : bv - av
   })
+  const taskHistoryMeta = (task?: Task) => notificationHistoryMeta({
+    category: 'case_task',
+    type_name: task?.task_type && taskTypeLabelKey[task.task_type] ? t(taskTypeLabelKey[task.task_type]) : t('caseTasks'),
+    object_name: task?.title || t('caseTasks'),
+  })
+  const taskMetaById = (id: string) => taskHistoryMeta(tasks.find(item => item.id === id))
 
   const approveMutation = useMutation({
     mutationFn: (id: string) => tasksApi.approve(id),
-    onSuccess: () => { toast.success(t('approveTaskSuccess')); qc.invalidateQueries({ queryKey: ['tasks', caseId] }) },
+    onSuccess: (_data, id) => {
+      toast.success(t('approveTaskSuccess'), taskMetaById(id))
+      qc.invalidateQueries({ queryKey: ['tasks', caseId] })
+    },
   })
   const completeMutation = useMutation({
     mutationFn: (id: string) => tasksApi.complete(id),
-    onSuccess: () => { toast.success(t('taskCompletedSuccess')); qc.invalidateQueries({ queryKey: ['tasks', caseId] }) },
-    onError: () => toast.error(t('operationFailed')),
+    onSuccess: (_data, id) => {
+      toast.success(t('taskCompletedSuccess'), taskMetaById(id))
+      qc.invalidateQueries({ queryKey: ['tasks', caseId] })
+    },
+    onError: (_error, id) => toast.error(t('operationFailed'), taskMetaById(id)),
   })
   const reopenMutation = useMutation({
     mutationFn: (id: string) => tasksApi.updateStatus(id, 'pending'),
-    onSuccess: () => { toast.success(t('taskReopenedSuccess')); qc.invalidateQueries({ queryKey: ['tasks', caseId] }) },
-    onError: () => toast.error(t('operationFailed')),
+    onSuccess: (_data, id) => {
+      toast.success(t('taskReopenedSuccess'), taskMetaById(id))
+      qc.invalidateQueries({ queryKey: ['tasks', caseId] })
+    },
+    onError: (_error, id) => toast.error(t('operationFailed'), taskMetaById(id)),
   })
   const deleteMutation = useMutation({
     mutationFn: (id: string) => tasksApi.softDelete(id),
-    onSuccess: () => { toast.success(t('taskDeletedSuccess')); qc.invalidateQueries({ queryKey: ['tasks', caseId] }) },
-    onError: () => toast.error(t('operationFailed')),
+    onSuccess: (_data, id) => {
+      toast.success(t('taskDeletedSuccess'), taskMetaById(id))
+      qc.invalidateQueries({ queryKey: ['tasks', caseId] })
+    },
+    onError: (_error, id) => toast.error(t('operationFailed'), taskMetaById(id)),
   })
 
   const pending = tasks.filter(t => TODO_STATUSES.has(t.status))

@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import toast from 'react-hot-toast'
 import { Scale, Mail, Lock, User, Building2 } from 'lucide-react'
 import { authApi } from '../api'
+import { notificationHistoryMeta } from '../utils/notificationHistory'
 
 export default function RegisterPage() {
   const { t } = useTranslation()
@@ -22,6 +23,11 @@ export default function RegisterPage() {
   const orgRef = useRef<HTMLInputElement>(null)
   const passwordsMismatch = passwordConfirm.length > 0 && password !== passwordConfirm
   const canRegister = Boolean(orgName.trim() && password.length >= 8 && password === passwordConfirm)
+  const registerMeta = () => notificationHistoryMeta({
+    category: 'account_system',
+    type_name: t('register'),
+    object_name: email || name || t('email'),
+  })
 
   // Clear all fields on mount (defeat browser autofill)
   useEffect(() => {
@@ -38,21 +44,21 @@ export default function RegisterPage() {
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!orgName.trim()) {
-      toast.error('请填写律所或公司名称')
+      toast.error('请填写律所或公司名称', registerMeta())
       return
     }
     if (password.length < 8) {
-      toast.error('密码至少需要 8 位')
+      toast.error('密码至少需要 8 位', registerMeta())
       return
     }
     if (password !== passwordConfirm) {
-      toast.error('两次输入的密码不一致')
+      toast.error('两次输入的密码不一致', registerMeta())
       return
     }
     setLoading(true)
     try {
       await authApi.register(email, name, password, passwordConfirm, orgName)
-      toast.success('注册成功，请登录')
+      toast.success('注册成功，请登录', registerMeta())
       navigate('/login')
     } catch (err: any) {
       const detail = err?.response?.data?.detail
@@ -62,7 +68,7 @@ export default function RegisterPage() {
       const message = rawMessage === 'Email already registered'
         ? '该邮箱已注册，请直接登录或换一个邮箱'
         : rawMessage || '注册失败，请检查填写信息后重试'
-      toast.error(message)
+      toast.error(message, registerMeta())
     } finally {
       setLoading(false)
     }

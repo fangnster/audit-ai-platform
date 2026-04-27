@@ -107,5 +107,6 @@ async def release_stale_agent_tasks(
             await delete_pattern(f"facts:{touched_case_id}:*")
             await delete_pattern(f"drafts:{touched_case_id}:*")
             await delete_pattern(f"tasks:{touched_case_id}:*")
+            await delete_pattern(f"agent-tasks:{touched_case_id}:*")
         await delete_pattern("admin:v1:*")
     return released

@@ -88,7 +88,7 @@ def parse_document(self, document_id: str, file_path: str, mime_type: str,
     """
     from sqlalchemy import create_engine
     from sqlalchemy.orm import Session
-    from app.config import settings
+    from app.database import sync_database_url
     from app.llm.provider import LLMService
     from app.models.case import Case
     from app.models.document import Document, ParseStatus
@@ -99,8 +99,7 @@ def parse_document(self, document_id: str, file_path: str, mime_type: str,
     from app.routers.documents import read_document_bytes
 
     # Use sync engine for Celery
-    sync_url = settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
-    engine = create_engine(sync_url)
+    engine = create_engine(sync_database_url())
 
     agent = None
     temp_path = ""
@@ -131,6 +130,7 @@ def parse_document(self, document_id: str, file_path: str, mime_type: str,
             session.commit()
             delete_pattern_sync(f"documents:{case_id}:*")
             delete_pattern_sync(f"tasks:{case_id}:*")
+            delete_pattern_sync(f"agent-tasks:{case_id}:*")
             delete_pattern_sync("admin:v1:*")
 
             case = session.get(Case, uuid.UUID(case_id))
@@ -213,6 +213,7 @@ def parse_document(self, document_id: str, file_path: str, mime_type: str,
             delete_pattern_sync(f"documents:{case_id}:*")
             delete_pattern_sync(f"facts:{case_id}:*")
             delete_pattern_sync(f"tasks:{case_id}:*")
+            delete_pattern_sync(f"agent-tasks:{case_id}:*")
             delete_pattern_sync("admin:v1:*")
 
             logger.info(f"Parsed doc {document_id}: {inserted} facts extracted")
@@ -252,6 +253,7 @@ def parse_document(self, document_id: str, file_path: str, mime_type: str,
                     session.commit()
                     delete_pattern_sync(f"documents:{case_id}:*")
                     delete_pattern_sync(f"tasks:{case_id}:*")
+                    delete_pattern_sync(f"agent-tasks:{case_id}:*")
                     delete_pattern_sync("admin:v1:*")
         except Exception:
             pass
@@ -283,6 +285,7 @@ def parse_document(self, document_id: str, file_path: str, mime_type: str,
                     session.commit()
                     delete_pattern_sync(f"documents:{case_id}:*")
                     delete_pattern_sync(f"tasks:{case_id}:*")
+                    delete_pattern_sync(f"agent-tasks:{case_id}:*")
                     delete_pattern_sync("admin:v1:*")
         except Exception:
             pass

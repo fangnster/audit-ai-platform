@@ -15,6 +15,7 @@ import type { AgentTask } from '../components/AgentRunLogPanel'
 import { ConfirmActionKind, ConfirmActionModal, ObjectLifecycleActions } from '../components/ObjectLifecycleActions'
 import { formatLocalDateTime } from '../utils/time'
 import { readableLlmError } from '../utils/llmError'
+import { notificationHistoryMeta } from '../utils/notificationHistory'
 
 type Section = {
   id: string; version: string; section_order: number;
@@ -76,6 +77,9 @@ export default function DraftsPage() {
   const [draftSortOrder, setDraftSortOrder] = useState<'asc' | 'desc'>('desc')
   const saveTimer = useRef<ReturnType<typeof setTimeout>>()
   const translationCache = useRef<Map<string, string>>(new Map())
+  const draftTaskStatusRef = useRef<Record<string, string>>({})
+  const submittedDraftTaskIdsRef = useRef<Set<string>>(new Set())
+  const notifiedDraftTaskIdsRef = useRef<Set<string>>(new Set())
 
   // Prompt-based generation
   const [genTitle, setGenTitle] = useState('')
@@ -128,6 +132,10 @@ export default function DraftsPage() {
   const agentTasks: AgentTask[] = tasksData?.data ?? []
   const runningDraftTask = agentTasks.find(t => DRAFT_AGENT_TYPES.has(t.task_type) && ACTIVE_AGENT_STATUSES.has(t.status))
   const runningGenerationTask = agentTasks.find(t => t.task_type === 'draft_generate' && ACTIVE_AGENT_STATUSES.has(t.status))
+  const draftTaskSignature = agentTasks
+    .filter(t => DRAFT_AGENT_TYPES.has(t.task_type))
+    .map(t => `${t.id}:${t.status}:${t.updated_at}`)
+    .join('|')
 
   useEffect(() => {
     if (!agentTasks.some(t => DRAFT_AGENT_TYPES.has(t.task_type) && ACTIVE_AGENT_STATUSES.has(t.status))) {
@@ -186,26 +194,116 @@ export default function DraftsPage() {
     setRewriteKnowledgeSearch('')
   }
 
+  const draftHistoryMeta = (typeName: string, objectName?: string, category: 'draft' | 'agent_draft' | 'translation' = 'draft') => notificationHistoryMeta({
+    category,
+    type_name: typeName,
+    object_name: objectName || t('aiDraftGeneration'),
+  })
+  const findSectionById = (id: string) => [...allSections, ...trashSections].find(item => item.id === id)
+  const sectionHistoryMeta = (sectionId: string, fallbackName?: string) => {
+    const section = findSectionById(sectionId)
+    return draftHistoryMeta(t('drafts'), section?.section_title || fallbackName || confirmAction?.name)
+  }
+
+  const draftSubmissionName = (title = genTitle, prompt = genPrompt) => {
+    const titleText = title.trim()
+    if (titleText) return titleText
+    const promptLine = prompt.split('\n').map(line => line.trim()).find(Boolean)
+    if (promptLine) return promptLine.length > 80 ? `${promptLine.slice(0, 80)}...` : promptLine
+    return t('untitledDraft')
+  }
+
+  const draftTaskName = (task: AgentTask) => {
+    if (task.task_type === 'rewrite_section') {
+      return String(task.human_context?.section?.title || task.input_params?.section_title || t('aiFullDraftRewrite'))
+    }
+    if (task.task_type === 'rfi_generate') return t('agentTaskRfiGenerate')
+    const outputTitles = Array.isArray(task.output_result?.draft_titles) ? task.output_result.draft_titles : []
+    return String(task.output_result?.draft_name || outputTitles[0] || task.input_params?.title || task.summary?.title || draftSubmissionName('', String(task.input_params?.prompt || '')))
+  }
+
+  const draftTaskTypeName = (task: AgentTask) => {
+    if (task.task_type === 'rewrite_section') return t('agentTaskRewriteSection')
+    if (task.task_type === 'rfi_generate') return t('agentTaskRfiGenerate')
+    return t('agentTaskDraftGenerate')
+  }
+
+  useEffect(() => {
+    agentTasks
+      .filter(task => DRAFT_AGENT_TYPES.has(task.task_type))
+      .forEach(task => {
+        const taskId = String(task.id)
+        const previousStatus = draftTaskStatusRef.current[taskId]
+        const isTerminal = task.status === 'completed' || task.status === 'failed'
+        const wasSubmittedHere = submittedDraftTaskIdsRef.current.has(taskId)
+        const shouldNotify = isTerminal && !notifiedDraftTaskIdsRef.current.has(taskId) && (
+          wasSubmittedHere || (previousStatus && previousStatus !== task.status)
+        )
+        if (shouldNotify) {
+          const name = draftTaskName(task)
+          const typeName = draftTaskTypeName(task)
+          const meta = draftHistoryMeta(typeName, name, 'agent_draft')
+          const reason = task.error_message || task.output_result?.error || ''
+          if (task.status === 'completed') {
+            const key = task.task_type === 'rewrite_section' ? 'rewriteTaskCompletedToast' : 'draftTaskCompletedToast'
+            toast.success(t(key, { name }), meta)
+          } else {
+            const key = task.task_type === 'rewrite_section' ? 'rewriteTaskFailedToast' : 'draftTaskFailedToast'
+            const reasonPrefix = i18n.language.startsWith('zh') ? '：' : ': '
+            toast.error(t(key, { name, reason: reason ? `${reasonPrefix}${reason}` : '' }), meta)
+          }
+          notifiedDraftTaskIdsRef.current.add(taskId)
+          submittedDraftTaskIdsRef.current.delete(taskId)
+        }
+        draftTaskStatusRef.current[taskId] = task.status
+      })
+  }, [draftTaskSignature, i18n.language])
+
   const generateMutation = useMutation({
     mutationFn: () => draftsApi.generate(caseId!, genTitle, genPrompt, genStrategy, selectedKnowledgeIds, selectedFactIds),
     onSuccess: (res) => {
-      toast.success(res.data.message ?? '文案生成已启动')
+      const taskId = res.data?.agent_task_id
+      if (res.data?.already_running) {
+        const name = draftSubmissionName(String(res.data?.draft_name || genTitle), genPrompt)
+        toast.error(t('draftTaskAlreadyRunning', { name }), draftHistoryMeta(t('agentTaskDraftGenerate'), name, 'agent_draft'))
+      } else if (taskId) {
+        submittedDraftTaskIdsRef.current.add(String(taskId))
+        draftTaskStatusRef.current[String(taskId)] = String(res.data?.status || 'queued')
+        const name = draftSubmissionName(String(res.data?.draft_name || genTitle), genPrompt)
+        toast.success(
+          t('generatedQueued', { name }),
+          notificationHistoryMeta({ category: 'task_submission', type_name: t('agentTaskDraftGenerate'), object_name: name }),
+        )
+      }
       qc.invalidateQueries({ queryKey: ['agentTasks', caseId] })
       qc.invalidateQueries({ queryKey: ['drafts', caseId] })
       resetGenerationState()
     },
-    onError: (e: any) => toast.error(`${readableLlmError(e, i18n.language, 'generate')}：${genTitle || t('aiDraftGeneration')}`),
+    onError: (e: any) => toast.error(
+      `${readableLlmError(e, i18n.language, 'generate')}：${draftSubmissionName()}`,
+      draftHistoryMeta(t('agentTaskDraftGenerate'), draftSubmissionName(), 'agent_draft'),
+    ),
   })
 
   const rewriteMutation = useMutation({
     mutationFn: ({ sectionId, instr, strategy, factIds, knowledgeIds }: { sectionId: string; instr: string; strategy: string; factIds: string[]; knowledgeIds: string[] }) =>
       draftsApi.rewrite(sectionId, instr, strategy, knowledgeIds, factIds),
-    onSuccess: () => {
-      toast.success(t('fullDraftRewriteQueued'))
+    onSuccess: (res) => {
+      const taskId = res.data?.agent_task_id
+      if (taskId) {
+        submittedDraftTaskIdsRef.current.add(String(taskId))
+        draftTaskStatusRef.current[String(taskId)] = String(res.data?.status || 'queued')
+      }
       resetRewriteState()
       qc.invalidateQueries({ queryKey: ['agentTasks', caseId] })
     },
-    onError: (e: any) => toast.error(`${readableLlmError(e, i18n.language, 'rewrite')}：${displaySections.find(s => s.id === rewriteSectionId)?.section_title || ''}`),
+    onError: (e: any) => {
+      const sectionTitle = displaySections.find(s => s.id === rewriteSectionId)?.section_title || ''
+      toast.error(
+        `${readableLlmError(e, i18n.language, 'rewrite')}：${sectionTitle}`,
+        draftHistoryMeta(t('agentTaskRewriteSection'), sectionTitle, 'agent_draft'),
+      )
+    },
   })
 
   const closeGenerationModal = () => {
@@ -263,18 +361,22 @@ export default function DraftsPage() {
   const restoreRevisionMutation = useMutation({
     mutationFn: ({ sectionId, revisionId }: { sectionId: string; revisionId: string }) =>
       draftsApi.restoreRevision(sectionId, revisionId),
-    onSuccess: () => {
-      toast.success(t('revisionRestored'))
+    onSuccess: (_data, variables) => {
+      const sectionTitle = historySection?.section_title || findSectionById(variables.sectionId)?.section_title
+      toast.success(t('revisionRestored'), draftHistoryMeta(t('revisionHistory'), sectionTitle))
       setHistorySection(null)
       qc.invalidateQueries({ queryKey: ['drafts', caseId] })
     },
-    onError: () => toast.error(t('error')),
+    onError: (_error, variables) => {
+      const sectionTitle = historySection?.section_title || findSectionById(variables.sectionId)?.section_title
+      toast.error(t('error'), draftHistoryMeta(t('revisionHistory'), sectionTitle))
+    },
   })
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => draftsApi.softDelete(id),
-    onSuccess: () => {
-      toast.success(t('movedToTrash'))
+    onSuccess: (_data, id) => {
+      toast.success(t('movedToTrash'), sectionHistoryMeta(id))
       qc.invalidateQueries({ queryKey: ['drafts', caseId] })
       qc.invalidateQueries({ queryKey: ['drafts-trash', caseId] })
     },
@@ -282,8 +384,8 @@ export default function DraftsPage() {
 
   const restoreMutation = useMutation({
     mutationFn: (id: string) => draftsApi.restore(id),
-    onSuccess: () => {
-      toast.success(t('restored'))
+    onSuccess: (_data, id) => {
+      toast.success(t('restored'), sectionHistoryMeta(id))
       qc.invalidateQueries({ queryKey: ['drafts', caseId] })
       qc.invalidateQueries({ queryKey: ['drafts-trash', caseId] })
     },
@@ -291,11 +393,14 @@ export default function DraftsPage() {
 
   const permanentDeleteMutation = useMutation({
     mutationFn: (id: string) => draftsApi.permanentDelete(id),
-    onSuccess: () => {
-      toast.success(t('permanentlyDeleted'))
+    onSuccess: (_data, id) => {
+      toast.success(t('permanentlyDeleted'), sectionHistoryMeta(id))
       qc.invalidateQueries({ queryKey: ['drafts-trash', caseId] })
     },
-    onError: (e: any) => toast.error(t('deleteFailedWithReason', { reason: e?.response?.data?.detail || e.message })),
+    onError: (e: any, id) => toast.error(
+      t('deleteFailedWithReason', { reason: e?.response?.data?.detail || e.message }),
+      sectionHistoryMeta(id),
+    ),
   })
 
   const confirmDraftAction = async () => {
@@ -313,8 +418,8 @@ export default function DraftsPage() {
   const updateMutation = useMutation({
     mutationFn: ({ id, title, content }: { id: string; title: string; content: string }) =>
       draftsApi.update(id, { section_title: title.trim(), content_preview: content }),
-    onSuccess: () => {
-      toast.success('已保存')
+    onSuccess: (_data, variables) => {
+      toast.success(t('saved'), draftHistoryMeta(t('drafts'), variables.title.trim() || findSectionById(variables.id)?.section_title))
       setEditId(null)
       setEditTitle('')
       qc.invalidateQueries({ queryKey: ['drafts', caseId] })
@@ -328,7 +433,7 @@ export default function DraftsPage() {
 
   const translateSectionContent = async (id: string, title: string, original: string, targetLang: 'en' | 'zh') => {
     if (!original.trim()) {
-      toast.error('没有可翻译的内容')
+      toast.error('没有可翻译的内容', draftHistoryMeta(t('translate'), title, 'translation'))
       return
     }
 
@@ -359,7 +464,7 @@ export default function DraftsPage() {
           ? { ...current, loading: false, error: message }
           : current
       ))
-      toast.error(message)
+      toast.error(message, draftHistoryMeta(t('translate'), title, 'translation'))
     } finally {
       setTranslatingId(null)
     }
@@ -422,10 +527,10 @@ export default function DraftsPage() {
     return asciiName || fallback
   }
 
-  const saveBlob = (data: BlobPart | Blob, filename: string, contentType?: string) => {
+  const saveBlob = (data: BlobPart | Blob, filename: string, contentType?: string, toastOptions?: Parameters<typeof toast.error>[1]) => {
     const blob = data instanceof Blob ? data : new Blob([data], { type: contentType || 'application/octet-stream' })
     if (blob.size === 0) {
-      toast.error(t('emptyExport'))
+      toast.error(t('emptyExport'), toastOptions)
       return false
     }
     const url = URL.createObjectURL(blob)
@@ -455,31 +560,36 @@ export default function DraftsPage() {
 
   const handleDraftExport = async (format: 'txt' | 'md' | 'docx' = 'docx') => {
     if (draftExporting) return
+    const exportName = allSections.length > 0
+      ? `${t('drafts')}（${allSections.length}）`
+      : t('drafts')
+    const meta = draftHistoryMeta(t('exportWord'), exportName)
     setDraftExporting(true)
     try {
       const res = await draftsApi.exportDrafts(caseId!, undefined, format)
       const contentType = typeof res.headers['content-type'] === 'string' ? res.headers['content-type'] : undefined
       const fallbackName = `draft_MAIN.${format}`
       const downloadName = filenameFromDisposition(res.headers['content-disposition'], fallbackName)
-      if (!saveBlob(res.data, downloadName, contentType)) return
-      toast.success(t('exportedAllDrafts'))
+      if (!saveBlob(res.data, downloadName, contentType, meta)) return
+      toast.success(t('exportedAllDrafts'), meta)
     } catch (e: any) {
-      toast.error(await errorDetailFromBlob(e))
+      toast.error(await errorDetailFromBlob(e), meta)
     } finally {
       setDraftExporting(false)
     }
   }
 
   const handleSectionExport = async (sectionId: string, sectionTitle: string) => {
+    const meta = draftHistoryMeta(t('exportWord'), sectionTitle)
     try {
       const res = await draftsApi.exportSection(sectionId, 'docx')
       const contentType = typeof res.headers['content-type'] === 'string' ? res.headers['content-type'] : undefined
       const safeTitle = sectionTitle.replace(/[/\\:*?"<>|]/g, '_').substring(0, 30)
       const downloadName = filenameFromDisposition(res.headers['content-disposition'], `${safeTitle}.docx`)
-      if (!saveBlob(res.data, downloadName, contentType)) return
-      toast.success(`已导出「${sectionTitle}」`)
+      if (!saveBlob(res.data, downloadName, contentType, meta)) return
+      toast.success(`已导出「${sectionTitle}」`, meta)
     } catch (e: any) {
-      toast.error(await errorDetailFromBlob(e))
+      toast.error(await errorDetailFromBlob(e), meta)
     }
   }
 
@@ -717,7 +827,10 @@ export default function DraftsPage() {
                       const approvedRecommended = approvedFacts.filter(f => f.confidence_score >= 0.8).map(f => f.id)
                       const recommended = approvedRecommended.length > 0 ? approvedRecommended : allFacts.filter(f => f.confidence_score >= 0.8).map(f => f.id)
                       setSelectedFactIds(recommended.length > 0 ? recommended : allFacts.map(f => f.id))
-                      toast.success(t('aiRecommendedFacts', { count: recommended.length || allFacts.length }))
+                      toast.success(
+                        t('aiRecommendedFacts', { count: recommended.length || allFacts.length }),
+                        draftHistoryMeta(t('facts'), draftSubmissionName()),
+                      )
                     }}>🤖 {t('aiRecommend')}</button>
                   <button className="btn btn-ghost btn-sm" style={{ fontSize: '0.72rem' }}
                     onClick={selectAllFacts}>{t('selectAll')}</button>

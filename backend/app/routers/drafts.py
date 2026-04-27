@@ -40,6 +40,37 @@ STRATEGY_LABELS = {
     "rewrite_keep_facts": "保留事实重组",
 }
 
+BUILTIN_DOCUMENT_TYPE_LABELS = {
+    "evidence": "证据材料",
+    "award": "获奖证明",
+    "original_contribution": "原创成果",
+    "patent": "专利",
+    "publication": "学术发表",
+    "citation": "引用数据",
+    "employment": "雇佣证明",
+    "media": "媒体报道",
+    "membership": "专业组织",
+    "resume": "个人简历",
+    "reference_letter": "推荐信",
+    "petition_letter": "申请信",
+    "rfi": "RFI 回复",
+    "other": "其他",
+}
+
+
+def _document_type_labels_for_user(user) -> dict[str, str]:
+    labels = dict(BUILTIN_DOCUMENT_TYPE_LABELS)
+    profile = dict(getattr(user, "profile", None) or {})
+    stored = ((profile.get("document_type_settings") or {}).get("items") or [])
+    for item in stored:
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("id") or "").strip()
+        label = str(item.get("label") or "").strip()
+        if item_id and label:
+            labels[item_id] = label
+    return labels
+
 
 def _compact_agent_payload(value, *, string_limit: int = 2400, list_limit: int = 30, depth: int = 0):
     """Keep Agent records detailed enough for auditing without returning huge prompts."""
@@ -261,7 +292,8 @@ def _agent_task_summary(task: AgentTask) -> dict:
         }
     if task_type == AgentTaskType.draft_generate.value:
         return {
-            "title": input_params.get("title"),
+            "title": output.get("draft_name") or input_params.get("title"),
+            "draft_titles": output.get("draft_titles"),
             "strategy": input_params.get("strategy"),
             "fact_count": output.get("fact_count"),
             "knowledge_ref_count": output.get("knowledge_ref_count"),
@@ -368,6 +400,7 @@ def _draft_payload(s: DraftSection) -> dict:
 
 async def _invalidate_draft_cache(case_id: uuid.UUID) -> None:
     await delete_pattern(f"drafts:{case_id}:*")
+    await delete_pattern(f"agent-tasks:{case_id}:*")
 
 
 async def _ensure_case_access(db: DB, case_id: uuid.UUID, current_user) -> None:
@@ -435,9 +468,12 @@ async def generate_drafts(case_id: uuid.UUID, body: GenerateRequest, current_use
     )
     running_task = running_result.scalar_one_or_none()
     if running_task:
+        running_params = running_task.input_params or {}
         return {
             "case_id": str(case_id),
             "agent_task_id": str(running_task.id),
+            "already_running": True,
+            "draft_name": running_params.get("title") or "",
             "status": str(running_task.status.value if hasattr(running_task.status, "value") else running_task.status),
             "message": "已有文案生成任务正在处理中，请稍候完成后再发起新的生成。",
         }
@@ -452,6 +488,7 @@ async def generate_drafts(case_id: uuid.UUID, body: GenerateRequest, current_use
             "strategy": body.strategy,
             "knowledge_ids": knowledge_ids,
             "fact_ids": body.fact_ids,
+            "doc_type_labels": _document_type_labels_for_user(current_user),
         },
         status=AgentTaskStatus.queued,
         priority=3,
@@ -469,6 +506,7 @@ async def generate_drafts(case_id: uuid.UUID, body: GenerateRequest, current_use
         return {
             "case_id": str(case_id),
             "agent_task_id": str(agent_task.id),
+            "draft_name": body.title,
             "status": "queued",
             "message": "文案生成已启动，AI 将根据提示词和知识库参考生成文案。",
         }
@@ -477,6 +515,7 @@ async def generate_drafts(case_id: uuid.UUID, body: GenerateRequest, current_use
         return {
             "case_id": str(case_id),
             "agent_task_id": str(agent_task.id),
+            "draft_name": body.title,
             "status": "queued",
             "message": f"已加入队列 (Celery 未运行: {str(e)[:80]})。启动 worker 后将自动处理。",
         }
@@ -752,6 +791,7 @@ async def rewrite_section(
             "strategy": body.strategy,
             "knowledge_ids": knowledge_ids,
             "fact_ids": body.fact_ids,
+            "doc_type_labels": _document_type_labels_for_user(current_user),
         },
         status=AgentTaskStatus.queued,
         priority=1,
@@ -760,6 +800,7 @@ async def rewrite_section(
     db.add(agent_task)
     await db.commit()
     await db.refresh(agent_task)
+    await _invalidate_draft_cache(section.case_id)
 
     # Check for existing lock
     import redis as _redis
@@ -835,6 +876,7 @@ async def generate_rfi(case_id: uuid.UUID, rfi_text: str, current_user: CurrentU
     )
     db.add(agent_task)
     await db.commit()
+    await _invalidate_draft_cache(case_id)
 
     return {
         "agent_task_id": str(agent_task.id),
@@ -853,6 +895,10 @@ async def list_agent_tasks(
     """List all agent tasks for a case (for progress monitoring)."""
     await _ensure_case_access(db, case_id, current_user)
     await release_stale_agent_tasks(db, case_id=case_id)
+    cache_key = f"agent-tasks:{case_id}:{current_user.id}:{sort_order}"
+    cached = await get_json(cache_key)
+    if cached is not None:
+        return cached
     order = AgentTask.updated_at.asc() if sort_order == "asc" else AgentTask.updated_at.desc()
     result = await db.execute(
         select(AgentTask)
@@ -862,7 +908,7 @@ async def list_agent_tasks(
     )
     tasks = result.scalars().all()
     human_contexts = await _agent_task_human_context(db, case_id, current_user, tasks)
-    return [
+    payload = [
         {
             "id": str(t.id),
             "task_type": t.task_type,
@@ -881,6 +927,8 @@ async def list_agent_tasks(
         }
         for t in tasks
     ]
+    await set_json(cache_key, payload, ttl=15)
+    return payload
 
 
 # ── Update Section ─────────────────────────

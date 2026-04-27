@@ -2,6 +2,7 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '../store/auth'
 import Breadcrumb from './Breadcrumb'
+import NotificationHistoryButton from './NotificationHistoryButton'
 import {
   LayoutDashboard, FolderOpen, FileText, BookOpen,
   CheckSquare, Settings, LogOut, Globe, Scale, ShieldCheck
@@ -53,6 +54,8 @@ export default function Layout() {
           <Globe size={14} />
           {i18n.language === 'zh' ? 'EN' : '中文'}
         </button>
+
+        <NotificationHistoryButton />
 
         <div style={{
           display: 'flex', alignItems: 'center', gap: 10,
