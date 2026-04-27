@@ -16,7 +16,7 @@ from app.models.fact import Fact, FactCollaboration
 from app.models.knowledge import KnowledgeItem
 from app.models.organization import DocumentCategory, Organization, OrgMember, Team
 from app.models.user import User
-from app.routers.documents import legacy_local_storage_path, local_storage_path, storage_client
+from app.routers.documents import legacy_local_storage_path, local_storage_path, storage_client, storage_key_candidates
 from app.services.cache import delete_pattern
 from app.config import settings
 
@@ -75,10 +75,16 @@ def delete_stored_file(storage_path: str) -> tuple[int, list[str]]:
 
     if settings.STORAGE_ENDPOINT_URL:
         try:
-            storage_client().delete_object(Bucket=settings.STORAGE_BUCKET_NAME, Key=storage_path)
-            deleted += 1
+            s3 = storage_client()
         except Exception as exc:
             errors.append(f"object:{storage_path}: {exc}")
+            return deleted, errors
+        for key in storage_key_candidates(storage_path):
+            try:
+                s3.delete_object(Bucket=settings.STORAGE_BUCKET_NAME, Key=key)
+                deleted += 1
+            except Exception as exc:
+                errors.append(f"object:{key}: {exc}")
 
     return deleted, errors
 

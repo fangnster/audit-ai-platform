@@ -116,11 +116,29 @@ def _validate_document_type_for_user(doc_type: str, user) -> str:
     return normalized
 
 
+def _safe_storage_segment(value: str, fallback: str) -> str:
+    raw = os.path.basename(str(value or "").replace("\x00", ""))
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", raw).strip("._-")
+    return (safe or fallback)[:120]
+
+
+def _safe_storage_filename(filename: str) -> str:
+    raw_name = os.path.basename(str(filename or "upload").replace("\x00", "")) or "upload"
+    stem, ext = os.path.splitext(raw_name)
+    safe_stem = _safe_storage_segment(stem, "upload")
+    safe_ext = re.sub(r"[^A-Za-z0-9.]+", "", ext)[:20]
+    if safe_ext == ".":
+        safe_ext = ""
+    return f"{safe_stem}{safe_ext}"[:180] or "upload"
+
+
 def build_storage_path(org_id, case_id, uploader_role: str, category_name: str, filename: str) -> str:
     import uuid as _uuid
-    safe = re.sub(r"[^\w.\-]", "_", filename)
+    safe_role = _safe_storage_segment(uploader_role, "role")
+    safe_category = _safe_storage_segment(category_name, "category")
+    safe = _safe_storage_filename(filename)
     prefix = _uuid.uuid4().hex[:8]
-    return f"org/{org_id}/case/{case_id}/{uploader_role}/{category_name}/{prefix}_{safe}"
+    return f"org/{org_id}/case/{case_id}/{safe_role}/{safe_category}/{prefix}_{safe}"
 
 
 def attachment_headers(filename: str) -> dict[str, str]:
@@ -191,9 +209,36 @@ def storage_client():
     )
 
 
+def _is_local_storage_endpoint(endpoint: str | None = None) -> bool:
+    endpoint = settings.STORAGE_ENDPOINT_URL if endpoint is None else endpoint
+    if not endpoint:
+        return True
+    lowered = endpoint.lower()
+    return any(host in lowered for host in ("minio", "localhost", "127.0.0.1", "::1"))
+
+
+def _remote_object_storage_required() -> bool:
+    return bool(
+        settings.STORAGE_ENDPOINT_URL
+        and settings.STORAGE_ACCESS_KEY
+        and settings.STORAGE_SECRET_KEY
+        and not _is_local_storage_endpoint()
+    )
+
+
+def storage_key_candidates(storage_path: str) -> list[str]:
+    key = str(storage_path or "")
+    candidates = [key]
+    if key and not key.isascii():
+        encoded = quote(key, safe="/")
+        if encoded not in candidates:
+            candidates.append(encoded)
+    return candidates
+
+
 def ensure_local_bucket_exists(s3) -> None:
     endpoint = settings.STORAGE_ENDPOINT_URL or ""
-    if not any(host in endpoint for host in ("minio", "localhost", "127.0.0.1")):
+    if not endpoint or not _is_local_storage_endpoint(endpoint):
         return
     try:
         s3.head_bucket(Bucket=settings.STORAGE_BUCKET_NAME)
@@ -220,16 +265,26 @@ def read_document_bytes(doc: Document) -> bytes:
         except Exception as exc:
             local_errors.append(f"{local_path}: {exc}")
 
+    object_errors: list[str] = []
     try:
         s3 = storage_client()
-        obj = s3.get_object(Bucket=settings.STORAGE_BUCKET_NAME, Key=doc.storage_path)
-        content = obj["Body"].read()
-        if content:
-            return content
-        raise FileNotFoundError("stored object is empty")
     except Exception as exc:
         detail = "; ".join(local_errors) if local_errors else "no local fallback file"
         raise FileNotFoundError(f"file not found in storage ({detail}; object storage: {exc})") from exc
+
+    for key in storage_key_candidates(doc.storage_path):
+        try:
+            obj = s3.get_object(Bucket=settings.STORAGE_BUCKET_NAME, Key=key)
+            content = obj["Body"].read()
+            if content:
+                return content
+            object_errors.append(f"{key}: empty")
+        except Exception as exc:
+            object_errors.append(f"{key}: {exc}")
+
+    detail = "; ".join(local_errors) if local_errors else "no local fallback file"
+    object_detail = "; ".join(object_errors) if object_errors else "not attempted"
+    raise FileNotFoundError(f"file not found in storage ({detail}; object storage: {object_detail})")
 
 
 async def _invalidate_document_cache(case_id: uuid.UUID) -> None:
@@ -259,8 +314,10 @@ async def upload_to_storage(file: UploadFile, storage_path: str) -> int:
             ContentType=file.content_type or "application/octet-stream",
         )
         return len(content)
-    except Exception:
-        # In dev, save locally as fallback
+    except Exception as exc:
+        if _remote_object_storage_required():
+            raise RuntimeError(f"object storage upload failed: {exc}") from exc
+        # In dev, save locally as fallback.
         local_path = local_storage_path(storage_path)
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
         with open(local_path, "wb") as f:
@@ -344,7 +401,10 @@ async def upload_document(
     storage_path = build_storage_path(case.org_id, case_id, uploader_role.value, category_name, file.filename or "upload")
 
     # Save to object storage
-    file_size = await upload_to_storage(file, storage_path)
+    try:
+        file_size = await upload_to_storage(file, storage_path)
+    except RuntimeError as exc:
+        raise HTTPException(503, "文件上传到对象存储失败，请稍后重试或联系管理员。") from exc
 
     # Create document record
     doc = Document(

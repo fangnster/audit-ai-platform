@@ -21,6 +21,15 @@ def test_attachment_header_supports_chinese_filename():
     assert "filename*=UTF-8''" in header
 
 
+def test_storage_path_uses_ascii_key_for_chinese_filename():
+    path = documents.build_storage_path("org-id", "case-id", "lawyer", "other", "邀请函-方.pdf")
+
+    path.encode("ascii")
+    assert "邀请函" not in path
+    assert path.startswith("org/org-id/case/case-id/lawyer/other/")
+    assert path.endswith("_upload.pdf")
+
+
 @pytest.mark.asyncio
 async def test_upload_fallback_preserves_file_bytes(monkeypatch, tmp_path):
     class FakeUpload:
@@ -33,6 +42,7 @@ async def test_upload_fallback_preserves_file_bytes(monkeypatch, tmp_path):
         def put_object(self, **kwargs):
             raise RuntimeError("storage unavailable")
 
+    monkeypatch.setattr(settings, "STORAGE_ENDPOINT_URL", "")
     monkeypatch.setattr(documents, "storage_client", lambda: BrokenStorage())
     monkeypatch.setattr(
         documents,
@@ -45,6 +55,34 @@ async def test_upload_fallback_preserves_file_bytes(monkeypatch, tmp_path):
     saved = tmp_path / "org_case_lawyer_other_test.txt"
     assert size == len(b"downloadable content")
     assert saved.read_bytes() == b"downloadable content"
+
+
+@pytest.mark.asyncio
+async def test_remote_storage_failure_does_not_create_unreadable_local_fallback(monkeypatch, tmp_path):
+    class FakeUpload:
+        content_type = "text/plain"
+
+        async def read(self):
+            return b"remote content"
+
+    class BrokenStorage:
+        def put_object(self, **kwargs):
+            raise RuntimeError("invalid key")
+
+    monkeypatch.setattr(settings, "STORAGE_ENDPOINT_URL", "https://storage.example.com")
+    monkeypatch.setattr(settings, "STORAGE_ACCESS_KEY", "access")
+    monkeypatch.setattr(settings, "STORAGE_SECRET_KEY", "secret")
+    monkeypatch.setattr(documents, "storage_client", lambda: BrokenStorage())
+    monkeypatch.setattr(
+        documents,
+        "local_storage_path",
+        lambda storage_path: str(tmp_path / storage_path.replace("/", "_")),
+    )
+
+    with pytest.raises(RuntimeError):
+        await documents.upload_to_storage(FakeUpload(), "org/case/lawyer/other/test.txt")
+
+    assert not (tmp_path / "org_case_lawyer_other_test.txt").exists()
 
 
 @pytest.mark.asyncio
