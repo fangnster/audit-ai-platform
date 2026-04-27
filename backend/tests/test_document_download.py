@@ -2,13 +2,14 @@ import pytest
 import uuid
 from datetime import datetime, timedelta, timezone
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import delete as sa_delete
 
 from app.config import settings
 from app.database import AsyncSessionLocal, engine
 from app.agents.fact_extractor import DocumentTextExtractionError, FactExtractionAgent
 from app.main import app
 from app.models.agent_task import AgentTask, AgentTaskStatus, AgentTaskType
-from app.models.document import Document, ParseStatus
+from app.models.document import Document, DocumentBlob, ParseStatus
 from app.routers import documents
 from app.workers import document_tasks
 
@@ -83,6 +84,54 @@ async def test_remote_storage_failure_does_not_create_unreadable_local_fallback(
         await documents.upload_to_storage(FakeUpload(), "org/case/lawyer/other/test.txt")
 
     assert not (tmp_path / "org_case_lawyer_other_test.txt").exists()
+
+
+@pytest.mark.asyncio
+async def test_remote_storage_failure_uses_database_fallback(monkeypatch, tmp_path):
+    storage_path = f"org/case/lawyer/other/{uuid.uuid4().hex}_upload.txt"
+    content = b"database fallback content"
+
+    class FakeUpload:
+        content_type = "text/plain"
+
+        async def read(self):
+            return content
+
+    class BrokenStorage:
+        def put_object(self, **kwargs):
+            raise RuntimeError("storage unavailable")
+
+        def get_object(self, **kwargs):
+            raise RuntimeError("storage unavailable")
+
+    monkeypatch.setattr(settings, "STORAGE_ENDPOINT_URL", "https://storage.example.com")
+    monkeypatch.setattr(settings, "STORAGE_ACCESS_KEY", "access")
+    monkeypatch.setattr(settings, "STORAGE_SECRET_KEY", "secret")
+    monkeypatch.setattr(documents, "storage_client", lambda: BrokenStorage())
+    monkeypatch.setattr(
+        documents,
+        "local_storage_path",
+        lambda value: str(tmp_path / value.replace("/", "_")),
+    )
+    monkeypatch.setattr(
+        documents,
+        "legacy_local_storage_path",
+        lambda value: str(tmp_path / f"legacy_{value.replace('/', '_')}"),
+    )
+
+    async with AsyncSessionLocal() as db:
+        await db.execute(sa_delete(DocumentBlob).where(DocumentBlob.storage_path == storage_path))
+        size = await documents.upload_to_storage(FakeUpload(), storage_path, db=db)
+        await db.commit()
+
+    try:
+        doc = Document(storage_path=storage_path, file_size=size, original_filename="upload.txt")
+        assert documents.read_document_bytes(doc) == content
+        assert not (tmp_path / storage_path.replace("/", "_")).exists()
+    finally:
+        async with AsyncSessionLocal() as db:
+            await db.execute(sa_delete(DocumentBlob).where(DocumentBlob.storage_path == storage_path))
+            await db.commit()
 
 
 @pytest.mark.asyncio

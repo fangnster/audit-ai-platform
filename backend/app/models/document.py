@@ -2,7 +2,7 @@ from typing import Optional
 import uuid
 from datetime import datetime
 from enum import Enum as PyEnum
-from sqlalchemy import String, Integer, Boolean, Enum, ForeignKey, DateTime, Index, Text, func, text
+from sqlalchemy import String, Integer, Boolean, Enum, ForeignKey, DateTime, Index, Text, func, text, LargeBinary
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
@@ -67,6 +67,17 @@ class DocumentVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=True)
 
     document: Mapped["Document"] = relationship("Document", back_populates="versions")
+
+
+class DocumentBlob(Base):
+    __tablename__ = "document_blobs"
+
+    storage_path: Mapped[str] = mapped_column(String(1000), primary_key=True)
+    content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    file_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    mime_type: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=True)
 
 
 from app.models.case import Case  # noqa

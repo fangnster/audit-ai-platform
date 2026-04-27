@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     STORAGE_BUCKET_NAME: str = "immigration-docs"
     STORAGE_PUBLIC_URL: str = ""           # CDN URL prefix
     STORAGE_REGION: str = ""               # e.g. Supabase project region, us-east-1 for many S3-compatible stores
+    DOCUMENT_DB_FALLBACK_MAX_BYTES: int = 25 * 1024 * 1024
 
     # LLM Providers (legacy named keys)
     ANTHROPIC_API_KEY: Optional[str] = None

@@ -6,14 +6,17 @@ from __future__ import annotations
 import uuid
 import os
 import re
+import logging
 from typing import Optional
 from urllib.parse import quote
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import create_engine, delete as sa_delete, func, select
+from sqlalchemy.orm import Session
 
 from app.deps import CurrentUser, DB, ensure_case_member
-from app.models.document import Document, UploaderRole, ParseStatus
+from app.database import sync_database_url
+from app.models.document import Document, DocumentBlob, UploaderRole, ParseStatus
 from app.models.organization import DocumentCategory
 from app.config import settings
 from app.services.agent_tasks import release_stale_agent_tasks
@@ -21,6 +24,7 @@ from app.services.cache import delete_pattern, get_json, set_json
 from app.utils.timezone import local_display, local_iso, local_now
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 BUILTIN_DOCUMENT_TYPES = [
@@ -195,6 +199,35 @@ def legacy_local_storage_path(storage_path: str) -> str:
     return f"/tmp/{storage_path.replace('/', '_')}"
 
 
+async def _save_document_blob(db, storage_path: str, content: bytes, mime_type: str | None) -> None:
+    existing = await db.get(DocumentBlob, storage_path)
+    if existing:
+        existing.content = content
+        existing.file_size = len(content)
+        existing.mime_type = mime_type
+        return
+    db.add(DocumentBlob(
+        storage_path=storage_path,
+        content=content,
+        file_size=len(content),
+        mime_type=mime_type,
+    ))
+
+
+def _read_document_blob(storage_path: str) -> tuple[bytes | None, str | None]:
+    engine = create_engine(sync_database_url(), pool_pre_ping=True)
+    try:
+        with Session(engine) as session:
+            blob = session.get(DocumentBlob, storage_path)
+            if blob and blob.content:
+                return bytes(blob.content), None
+            return None, None
+    except Exception as exc:
+        return None, str(exc)
+    finally:
+        engine.dispose()
+
+
 def storage_client():
     import boto3
     from botocore.config import Config
@@ -265,6 +298,10 @@ def read_document_bytes(doc: Document) -> bytes:
         except Exception as exc:
             local_errors.append(f"{local_path}: {exc}")
 
+    db_content, db_error = _read_document_blob(doc.storage_path)
+    if db_content:
+        return db_content
+
     object_errors: list[str] = []
     try:
         s3 = storage_client()
@@ -282,6 +319,8 @@ def read_document_bytes(doc: Document) -> bytes:
         except Exception as exc:
             object_errors.append(f"{key}: {exc}")
 
+    if db_error:
+        local_errors.append(f"database fallback: {db_error}")
     detail = "; ".join(local_errors) if local_errors else "no local fallback file"
     object_detail = "; ".join(object_errors) if object_errors else "not attempted"
     raise FileNotFoundError(f"file not found in storage ({detail}; object storage: {object_detail})")
@@ -301,7 +340,7 @@ async def _get_document_for_user(doc_id: uuid.UUID, current_user, db: DB) -> Doc
     return doc
 
 
-async def upload_to_storage(file: UploadFile, storage_path: str) -> int:
+async def upload_to_storage(file: UploadFile, storage_path: str, db=None) -> int:
     """Upload file bytes to S3/R2/MinIO. Returns file size."""
     content = await file.read()
     try:
@@ -316,6 +355,25 @@ async def upload_to_storage(file: UploadFile, storage_path: str) -> int:
         return len(content)
     except Exception as exc:
         if _remote_object_storage_required():
+            logger.warning(
+                "object_storage_upload_failed storage_path=%s size=%s error=%s",
+                storage_path,
+                len(content),
+                str(exc)[:500],
+            )
+            if db is not None:
+                max_bytes = int(settings.DOCUMENT_DB_FALLBACK_MAX_BYTES or 0)
+                if max_bytes > 0 and len(content) > max_bytes:
+                    raise RuntimeError(
+                        "object storage upload failed and file exceeds database fallback limit"
+                    ) from exc
+                await _save_document_blob(db, storage_path, content, file.content_type or "application/octet-stream")
+                logger.warning(
+                    "document_saved_to_database_fallback storage_path=%s size=%s",
+                    storage_path,
+                    len(content),
+                )
+                return len(content)
             raise RuntimeError(f"object storage upload failed: {exc}") from exc
         # In dev, save locally as fallback.
         local_path = local_storage_path(storage_path)
@@ -402,7 +460,7 @@ async def upload_document(
 
     # Save to object storage
     try:
-        file_size = await upload_to_storage(file, storage_path)
+        file_size = await upload_to_storage(file, storage_path, db=db)
     except RuntimeError as exc:
         raise HTTPException(503, "文件上传到对象存储失败，请稍后重试或联系管理员。") from exc
 
@@ -669,6 +727,7 @@ async def permanent_delete_document(doc_id: uuid.UUID, current_user: CurrentUser
     if not doc.is_deleted:
         raise HTTPException(400, "Document must be in trash before permanent deletion")
     case_id = doc.case_id
+    await db.execute(sa_delete(DocumentBlob).where(DocumentBlob.storage_path == doc.storage_path))
     await db.delete(doc)
     await db.commit()
     await _invalidate_document_cache(case_id)

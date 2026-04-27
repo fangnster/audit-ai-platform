@@ -13,14 +13,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent.parent / ".env")
 
-from app.database import Base
+from app.database import Base, sync_database_url
 from app.models import *  # register all models
 
 config = context.config
 
-# Convert asyncpg URL → psycopg2 for sync migrations
-db_url = os.environ.get("DATABASE_URL", "")
-sync_url = os.environ.get("DATABASE_URL_SYNC") or db_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+# Convert common PostgreSQL URLs into a psycopg2-safe URL for sync migrations.
+sync_url = os.environ.get("DATABASE_URL_SYNC") or sync_database_url(os.environ.get("DATABASE_URL"))
 config.set_main_option("sqlalchemy.url", sync_url)
 
 if config.config_file_name is not None:

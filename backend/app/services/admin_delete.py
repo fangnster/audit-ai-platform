@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agent_task import AgentTask
 from app.models.case import Case, CaseMember
-from app.models.document import Document, DocumentVersion
+from app.models.document import Document, DocumentBlob, DocumentVersion
 from app.models.draft import DraftRevision, DraftSection, LawyerTask, UserSession
 from app.models.fact import Fact, FactCollaboration
 from app.models.knowledge import KnowledgeItem
@@ -104,6 +104,12 @@ async def delete_documents_by_ids(db: AsyncSession, document_ids: list[uuid.UUID
         summary.storage_errors.extend(storage_errors)
 
     doc_ids = [doc.id for doc in docs]
+    storage_paths = [doc.storage_path for doc in docs]
+    if storage_paths:
+        summary.files_deleted += await _execute_delete(
+            db,
+            sa_delete(DocumentBlob).where(DocumentBlob.storage_path.in_(storage_paths)),
+        )
     await db.execute(update(Fact).where(Fact.source_document_id.in_(doc_ids)).values(source_document_id=None))
     await _execute_delete(db, sa_delete(DocumentVersion).where(DocumentVersion.document_id.in_(doc_ids)))
     summary.documents_deleted += await _execute_delete(db, sa_delete(Document).where(Document.id.in_(doc_ids)))
