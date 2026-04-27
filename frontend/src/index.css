@@ -172,6 +172,43 @@ a:hover { color: var(--accent-hover); }
   line-height: 1;
 }
 
+.app-toast-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  margin-right: 10px;
+}
+
+.app-toast-content {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.app-toast-message {
+  color: var(--text-primary);
+  font-weight: 500;
+  line-height: 1.45;
+  white-space: pre-line;
+  word-break: break-word;
+}
+
+.app-toast-case {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin-top: 5px;
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+.app-toast-case span + span::before {
+  content: "·";
+  margin-right: 8px;
+  color: var(--text-muted);
+}
+
 .notification-history-panel {
   position: absolute;
   top: calc(100% + 10px);

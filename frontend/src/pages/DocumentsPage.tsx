@@ -240,7 +240,7 @@ export default function DocumentsPage() {
         if (shouldNotify) {
           const name = parseTaskDocumentName(task)
           const typeId = parseTaskDocType(task)
-          const meta = docHistoryMeta(name, typeId, 'agent_document')
+          const meta = docHistoryMeta(name, typeId, 'agent_document', taskCaseMeta(task))
           if (task.status === 'completed') {
             const count = task.summary?.facts_extracted ?? task.output_result?.facts_extracted ?? 0
             toast.success(t('parseTaskCompletedToast', { name, count }), meta)
@@ -290,12 +290,34 @@ export default function DocumentsPage() {
     acc[key].push(d)
     return acc
   }, {})
-  const docHistoryMeta = (filename: string, typeId?: string, category: 'document' | 'agent_document' = 'document') => notificationHistoryMeta({
+  const cleanTaskText = (value: unknown) => String(value || '').trim()
+  const taskCaseMeta = (task?: AgentTask) => ({
+    case_title: cleanTaskText(
+      task?.case_title ||
+      task?.human_context?.case?.title ||
+      task?.input_params?.case_title ||
+      task?.output_result?.case_title ||
+      caseInfo?.title,
+    ) || undefined,
+    case_type: cleanTaskText(
+      task?.case_type ||
+      task?.human_context?.case?.type ||
+      task?.input_params?.case_type ||
+      task?.output_result?.case_type ||
+      caseInfo?.case_type,
+    ) || undefined,
+  })
+  const docHistoryMeta = (
+    filename: string,
+    typeId?: string,
+    category: 'document' | 'agent_document' = 'document',
+    caseMeta: { case_title?: string; case_type?: string } = {},
+  ) => notificationHistoryMeta({
     category,
     type_name: typeId ? docTypeLabel(typeId) : t('itemDocument'),
     object_name: filename,
-    case_title: caseInfo?.title,
-    case_type: caseInfo?.case_type,
+    case_title: caseMeta.case_title || caseInfo?.title,
+    case_type: caseMeta.case_type || caseInfo?.case_type,
   })
   const findDocById = (docId: string) => [...allDocs, ...trashDocs].find(item => item.id === docId)
   const docActionMeta = (docId: string, fallbackName?: string) => {

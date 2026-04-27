@@ -72,6 +72,14 @@ function caseContext(item: NotificationHistoryItem) {
   return [caseTitle ? shortText(caseTitle, 80) : '', caseType || ''].filter(Boolean).join(' · ')
 }
 
+function caseTitle(item: NotificationHistoryItem) {
+  return item.meta?.case_title?.trim() || ''
+}
+
+function caseType(item: NotificationHistoryItem) {
+  return item.meta?.case_type?.trim() || ''
+}
+
 export default function NotificationHistoryButton() {
   const { t, i18n } = useTranslation()
   const [open, setOpen] = useState(false)
@@ -165,10 +173,16 @@ export default function NotificationHistoryButton() {
                     <span>{formatLocalDateTime(item.created_at, i18n.language)}</span>
                   </div>
                   <div className="notification-history-context">
-                    {caseContext(item) && (
+                    {caseTitle(item) && (
                       <div>
                         <span>{t('caseTitle')}</span>
-                        <strong>{caseContext(item)}</strong>
+                        <strong>{shortText(caseTitle(item), 80)}</strong>
+                      </div>
+                    )}
+                    {caseType(item) && (
+                      <div>
+                        <span>{t('caseType')}</span>
+                        <strong>{caseType(item)}</strong>
                       </div>
                     )}
                     <div>

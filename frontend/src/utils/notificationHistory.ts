@@ -346,6 +346,20 @@ function splitHistoryOptions<T extends object | undefined>(options: T) {
   }
 }
 
+function toastOptionsWithHistoryMeta<T extends object | undefined>(
+  toastOptions: T,
+  category: NotificationCategory,
+  meta?: NotificationHistoryMeta,
+) {
+  const displayMeta = cleanMeta(meta ? { ...meta, category: meta.category || category } : { category })
+  if (!displayMeta) return toastOptions
+  return {
+    ...(toastOptions as Record<string, unknown> | undefined),
+    historyMeta: displayMeta,
+    notificationCategory: category,
+  } as T
+}
+
 export function installToastHistoryRecorder() {
   if (installed) return
   installed = true
@@ -357,7 +371,7 @@ export function installToastHistoryRecorder() {
     const { toastOptions, historyMeta, shouldRecord } = splitHistoryOptions(options)
     const category = inferNotificationCategory(historyMeta, message)
     if (shouldRecord && canRecord(category)) recordNotification('success', message, category, historyMeta)
-    if (canPopup(category)) return originalSuccess(message, toastOptions)
+    if (canPopup(category)) return originalSuccess(message, toastOptionsWithHistoryMeta(toastOptions, category, historyMeta))
     return '' as ReturnType<typeof originalSuccess>
   }) as typeof toast.success
 
@@ -365,7 +379,7 @@ export function installToastHistoryRecorder() {
     const { toastOptions, historyMeta, shouldRecord } = splitHistoryOptions(options)
     const category = inferNotificationCategory(historyMeta, message)
     if (shouldRecord && canRecord(category)) recordNotification('error', message, category, historyMeta)
-    if (canPopup(category)) return originalError(message, toastOptions)
+    if (canPopup(category)) return originalError(message, toastOptionsWithHistoryMeta(toastOptions, category, historyMeta))
     return '' as ReturnType<typeof originalError>
   }) as typeof toast.error
 }

@@ -110,12 +110,33 @@ export default function FactsPage() {
   const categories = [...new Set(displayFacts.map(f => f.category))]
   const disputeFact = displayFacts.find(f => f.id === disputeId) || allFacts.find(f => f.id === disputeId)
   const findFactById = (id: string) => [...allFacts, ...trashFacts].find(f => f.id === id)
-  const factHistoryMeta = (fact?: any, category: 'fact' | 'agent_fact' | 'translation' = 'fact') => notificationHistoryMeta({
+  const cleanTaskText = (value: unknown) => String(value || '').trim()
+  const taskCaseMeta = (task?: AgentTask) => ({
+    case_title: cleanTaskText(
+      task?.case_title ||
+      task?.human_context?.case?.title ||
+      task?.input_params?.case_title ||
+      task?.output_result?.case_title ||
+      caseInfo?.title,
+    ) || undefined,
+    case_type: cleanTaskText(
+      task?.case_type ||
+      task?.human_context?.case?.type ||
+      task?.input_params?.case_type ||
+      task?.output_result?.case_type ||
+      caseInfo?.case_type,
+    ) || undefined,
+  })
+  const factHistoryMeta = (
+    fact?: any,
+    category: 'fact' | 'agent_fact' | 'translation' = 'fact',
+    caseMeta: { case_title?: string; case_type?: string } = {},
+  ) => notificationHistoryMeta({
     category,
     type_name: fact?.category || t('agentRunCategoryFactReparse'),
     object_name: fact?.content?.substring(0, 120) || t('itemFact'),
-    case_title: caseInfo?.title,
-    case_type: caseInfo?.case_type,
+    case_title: caseMeta.case_title || caseInfo?.title,
+    case_type: caseMeta.case_type || caseInfo?.case_type,
   })
 
   const { data: disputeKnowledgeData } = useQuery({
@@ -177,8 +198,7 @@ export default function FactsPage() {
             category: 'agent_fact',
             type_name: factCategory,
             object_name: factTitle,
-            case_title: caseInfo?.title,
-            case_type: caseInfo?.case_type,
+            ...taskCaseMeta(task),
           })
           if (task.status === 'completed') {
             toast.success(t('factReparseCompletedToast', { name: factTitle }), meta)

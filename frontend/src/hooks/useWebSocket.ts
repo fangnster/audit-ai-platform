@@ -16,9 +16,15 @@ export function useCaseWebSocket(caseId: string) {
       const data = (value as any)?.data ?? value
       return Array.isArray(data) ? data : []
     })
-    const cachedCaseTitle = () => {
+    const cachedCaseMeta = () => {
       const data = qc.getQueryData<any>(['case', caseId])?.data
-      return data?.title || t('caseTasks')
+      return {
+        case_title: data?.title || '',
+        case_type: data?.case_type || '',
+      }
+    }
+    const cachedCaseTitle = () => {
+      return cachedCaseMeta().case_title || t('caseTasks')
     }
     const sectionName = (sectionId?: string) => {
       const section = cachedItems(['drafts', caseId]).find((item: any) => item.id === sectionId)
@@ -45,20 +51,20 @@ export function useCaseWebSocket(caseId: string) {
           
           if (data.type === 'section_updated') {
             const name = sectionName(data.section_id)
-            toast.success(t('fullDraftRewritten'), notificationHistoryMeta({ category: 'agent_draft', type_name: t('agentTaskRewriteSection'), object_name: name }))
+            toast.success(t('fullDraftRewritten'), notificationHistoryMeta({ category: 'agent_draft', type_name: t('agentTaskRewriteSection'), object_name: name, ...cachedCaseMeta() }))
             qc.invalidateQueries({ queryKey: ['drafts', caseId] })
             qc.invalidateQueries({ queryKey: ['agentTasks', caseId] })
           } else if (data.type === 'fact_fixed') {
             const name = factName(data.fact_id)
-            toast.success('事实更新，相关文案已同步刷新', notificationHistoryMeta({ category: 'fact', type_name: t('facts'), object_name: name }))
+            toast.success('事实更新，相关文案已同步刷新', notificationHistoryMeta({ category: 'fact', type_name: t('facts'), object_name: name, ...cachedCaseMeta() }))
             qc.invalidateQueries({ queryKey: ['drafts', caseId] })
           } else if (data.type === 'fact_reparsed') {
             const name = factName(data.fact_id)
-            toast.success(t('factDisputeReparsed'), notificationHistoryMeta({ category: 'agent_fact', type_name: t('agentRunCategoryFactReparse'), object_name: name }))
+            toast.success(t('factDisputeReparsed'), notificationHistoryMeta({ category: 'agent_fact', type_name: t('agentRunCategoryFactReparse'), object_name: name, ...cachedCaseMeta() }))
             qc.invalidateQueries({ queryKey: ['facts', caseId] })
             qc.invalidateQueries({ queryKey: ['agentTasks', caseId] })
           } else if (data.type === 'rfi_generated') {
-            toast.success('RFI 补件回复已生成', notificationHistoryMeta({ category: 'agent_draft', type_name: t('agentTaskRfiGenerate'), object_name: cachedCaseTitle() }))
+            toast.success('RFI 补件回复已生成', notificationHistoryMeta({ category: 'agent_draft', type_name: t('agentTaskRfiGenerate'), object_name: cachedCaseTitle(), ...cachedCaseMeta() }))
             qc.invalidateQueries({ queryKey: ['agentTasks', caseId] })
           }
         } catch (err) {
