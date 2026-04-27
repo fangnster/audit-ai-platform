@@ -18,6 +18,8 @@ export type NotificationCategory =
 export type NotificationHistoryMeta = {
   type_name?: string
   object_name?: string
+  case_title?: string
+  case_type?: string
   category?: NotificationCategory
 }
 
@@ -52,15 +54,15 @@ export const NOTIFICATION_CATEGORIES: Array<{
     key: 'task_submission',
     labelZh: '后台任务提交',
     labelEn: 'Background task submission',
-    descriptionZh: '解析任务已提交、文案生成已启动等入队提示',
-    descriptionEn: 'Queued-task messages such as parsing submitted and draft generation started',
+    descriptionZh: '解析、重解析、文案生成等任务已进入后台队列的提交提示；不是最终成功或失败结果',
+    descriptionEn: 'Queued-task messages for parsing, reparsing, and draft generation; not final success or failure results',
   },
   {
     key: 'agent_document',
-    labelZh: '文件解析',
-    labelEn: 'File parsing',
-    descriptionZh: '文件解析、重新解析及解析失败结果',
-    descriptionEn: 'File parse, reparse, and parse failure results',
+    labelZh: '文件解析结果',
+    labelEn: 'File parsing results',
+    descriptionZh: '文件解析、重新解析的成功和失败结果，以及重复任务、启动失败等解析相关提示',
+    descriptionEn: 'Success and failure results for file parsing and reparsing, plus duplicate-task and startup failure notices',
   },
   {
     key: 'agent_fact',
@@ -71,10 +73,10 @@ export const NOTIFICATION_CATEGORIES: Array<{
   },
   {
     key: 'agent_draft',
-    labelZh: '文案生成 / AI 重写',
-    labelEn: 'Draft generation / AI rewrite',
-    descriptionZh: '文案生成、AI 重写、RFI 生成等 Agent 结果',
-    descriptionEn: 'Draft generation, AI rewrite, RFI generation, and related Agent results',
+    labelZh: '文案生成 / AI 重写结果',
+    labelEn: 'Draft generation / AI rewrite results',
+    descriptionZh: '文案生成、AI 重写、RFI 生成的成功和失败结果，以及重复任务、启动失败等相关提示',
+    descriptionEn: 'Success and failure results for draft generation, AI rewrite, and RFI generation, plus related duplicate-task and startup failure notices',
   },
   {
     key: 'translation',
@@ -229,11 +231,15 @@ function cleanMeta(meta?: NotificationHistoryMeta) {
   if (!meta) return undefined
   const typeName = meta.type_name?.trim()
   const objectName = meta.object_name?.trim()
+  const caseTitle = meta.case_title?.trim()
+  const caseType = meta.case_type?.trim()
   const category = meta.category ? normalizeCategory(meta.category) : undefined
-  if (!typeName && !objectName && !category) return undefined
+  if (!typeName && !objectName && !caseTitle && !caseType && !category) return undefined
   return {
     ...(typeName ? { type_name: typeName } : {}),
     ...(objectName ? { object_name: objectName } : {}),
+    ...(caseTitle ? { case_title: caseTitle } : {}),
+    ...(caseType ? { case_type: caseType } : {}),
     ...(category ? { category } : {}),
   }
 }

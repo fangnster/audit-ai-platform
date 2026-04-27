@@ -349,6 +349,8 @@ async def dispute_fact(fact_id: uuid.UUID, body: DisputeRequest, current_user: C
         sd["reparse_knowledge_refs"] = knowledge_refs
 
     case = await db.get(Case, fact.case_id)
+    case_type = case.case_type.value if case and hasattr(case.case_type, "value") else (str(case.case_type) if case else "")
+    case_title = case.title if case else ""
     org = await db.get(Organization, case.org_id) if case else None
     org_settings = org.settings if org and org.settings else {}
 
@@ -359,6 +361,8 @@ async def dispute_fact(fact_id: uuid.UUID, body: DisputeRequest, current_user: C
         task_type=AgentTaskType.fact_reparse,
         input_params={
             "case_id": str(fact.case_id),
+            "case_title": case_title,
+            "case_type": case_type,
             "fact_id": str(fact.id),
             "fact_category": fact.category,
             "comment": dispute_comment,

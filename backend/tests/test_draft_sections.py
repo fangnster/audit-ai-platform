@@ -1,5 +1,6 @@
 import uuid
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -28,13 +29,16 @@ class FakeResult:
 
 
 class FakeDraftDb:
-    def __init__(self, sections):
+    def __init__(self, sections, case=None):
         self.sections = sections
+        self.case = case
 
     async def execute(self, query):
         return FakeResult(self.sections)
 
     async def get(self, model, section_id):
+        if getattr(model, "__name__", "") == "Case" and self.case and self.case.id == section_id:
+            return self.case
         return next((section for section in self.sections if section.id == section_id), None)
 
 
@@ -71,6 +75,10 @@ def make_section(
         is_deleted=False,
         pending_slots={},
     )
+
+
+def make_case(case_id: uuid.UUID, title: str = "张三 EB-1A 案件", case_type: str = "EB1A"):
+    return SimpleNamespace(id=case_id, title=title, case_type=case_type)
 
 
 def test_split_uses_generated_top_title_and_strips_thinking_block():
@@ -316,7 +324,7 @@ async def test_export_drafts_docx_returns_non_empty_word_file():
         version="b",
         format="docx",
         current_user=object(),
-        db=FakeDraftDb([section]),
+        db=FakeDraftDb([section], case=make_case(case_id)),
     )
 
     assert response.body.startswith(b"PK")
@@ -335,11 +343,14 @@ async def test_export_section_txt_returns_title_and_content():
         section.id,
         format="txt",
         current_user=object(),
-        db=FakeDraftDb([section]),
+        db=FakeDraftDb([section], case=make_case(case_id)),
     )
     text = response.body.decode("utf-8")
 
     assert "客户陈述" in text
+    assert "案件名称：张三 EB-1A 案件" in text
+    assert "案件类型：EB1A" in text
+    assert "生成时间：" in text
     assert "Single section export body." in text
     assert response.headers["content-length"] == str(len(response.body))
     assert "filename*=UTF-8''" in response.headers["content-disposition"]

@@ -19,6 +19,7 @@ import redis
 from app.workers.celery_app import celery_app
 from app.config import settings
 from app.llm.provider import strip_think_tags
+from app.utils.timezone import local_iso, local_now
 
 logger = logging.getLogger(__name__)
 redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
@@ -444,6 +445,8 @@ def generate_drafts(self, case_id: str, agent_task_id: str):
                     _mark_failed(agent_task, {"error": "case not found"}, started_at, "case not found")
                     session.commit()
                 return {"error": "case not found"}
+            case_title = case.title
+            case_type = case.case_type.value if hasattr(case.case_type, "value") else str(case.case_type)
 
             # Read prompt, knowledge_ids, fact_ids from agent_task input_params
             input_params = (agent_task.input_params or {}) if agent_task else {}
@@ -495,7 +498,18 @@ def generate_drafts(self, case_id: str, agent_task_id: str):
 
             if not facts:
                 if agent_task:
-                    _mark_failed(agent_task, {"error": "no facts", "case_id": case_id}, started_at, "no facts")
+                    _mark_failed(
+                        agent_task,
+                        {
+                            "error": "no facts",
+                            "case_id": case_id,
+                            "case_title": case_title,
+                            "case_type": case_type,
+                            "generated_at": local_iso(local_now()),
+                        },
+                        started_at,
+                        "no facts",
+                    )
                     session.commit()
                 return {"error": "no facts", "case_id": case_id}
 
@@ -541,7 +555,7 @@ def generate_drafts(self, case_id: str, agent_task_id: str):
             ))
             content = _run_async(agent.generate_draft(
                 facts=facts,
-                case_type=case.case_type.value if hasattr(case.case_type, 'value') else str(case.case_type),
+                case_type=case_type,
                 draft_title=draft_title,
                 user_prompt=user_prompt,
                 strategy=strategy,
@@ -581,6 +595,9 @@ def generate_drafts(self, case_id: str, agent_task_id: str):
                     change_summary="Initial AI generation",
                     revision_metadata={
                         "agent_task_id": agent_task_id,
+                        "case_title": case_title,
+                        "case_type": case_type,
+                        "generated_at": local_iso(local_now()),
                         "history_ref_count": len(history_refs),
                         "fact_refs": fact_refs,
                         "document_refs": document_refs,
@@ -592,6 +609,9 @@ def generate_drafts(self, case_id: str, agent_task_id: str):
                 agent_task,
                 {
                     "versions": list(drafts.keys()),
+                    "case_title": case_title,
+                    "case_type": case_type,
+                    "generated_at": local_iso(local_now()),
                     "draft_name": draft_titles[0] if draft_titles else draft_title,
                     "draft_titles": draft_titles,
                     "fact_count": len(facts),
@@ -714,6 +734,8 @@ def rewrite_section(self, section_id: str, instruction: str, case_id: str, agent
             history_refs: list[dict] = []
 
             case = session.get(Case, uuid.UUID(case_id))
+            case_title = case.title if case else ""
+            case_type = case.case_type.value if case and hasattr(case.case_type, "value") else (str(case.case_type) if case else "")
             org = session.get(Organization, case.org_id) if case else None
             org_settings = org.settings if org and org.settings else {}
 
@@ -752,7 +774,12 @@ def rewrite_section(self, section_id: str, instruction: str, case_id: str, agent
                 editor_role="agent",
                 editor_id=None,
                 change_summary=f"Agent rewrite: {instruction[:100]}",
-                revision_metadata={"agent_task_id": agent_task_id},
+                revision_metadata={
+                    "agent_task_id": agent_task_id,
+                    "case_title": case_title,
+                    "case_type": case_type,
+                    "generated_at": local_iso(local_now()),
+                },
             ))
             section.content = new_content
             section.status = SectionStatus.draft
@@ -761,6 +788,10 @@ def rewrite_section(self, section_id: str, instruction: str, case_id: str, agent
                 agent_task,
                 {
                     "section_id": section_id,
+                    "section_title": section.section_title,
+                    "case_title": case_title,
+                    "case_type": case_type,
+                    "generated_at": local_iso(local_now()),
                     "instruction": instruction,
                     "strategy": strategy,
                     "history_ref_count": len(history_refs),
@@ -850,7 +881,6 @@ def reparse_fact(self, case_id: str, fact_id: str, agent_task_id: str):
     from app.models.organization import Organization
     from app.models.knowledge import KnowledgeItem
     from app.llm.provider import LLMService
-    from app.utils.timezone import local_iso, local_now
     from sqlalchemy import select
 
     started_at = time.perf_counter()
@@ -943,6 +973,8 @@ Lawyer dispute/comment:
 Return ONLY the revised fact content in 1-3 precise sentences. Do not add facts that are not supported by the source context, original fact, or lawyer correction."""
 
             case = session.get(Case, uuid.UUID(case_id))
+            case_title = case.title if case else ""
+            case_type = case.case_type.value if case and hasattr(case.case_type, "value") else (str(case.case_type) if case else "")
             org = session.get(Organization, case.org_id) if case else None
             org_settings = org.settings if org and org.settings else {}
             fallback_used = False
@@ -969,6 +1001,9 @@ Return ONLY the revised fact content in 1-3 precise sentences. Do not add facts 
             structured = dict(fact.structured_data or {})
             structured["dispute_comment"] = dispute_comment
             structured["original_content"] = original_content
+            structured["case_title"] = case_title
+            structured["case_type"] = case_type
+            structured["generated_at"] = local_iso(local_now())
             structured["reparse_source"] = source_diagnostics
             structured["reparse_agent_task_id"] = agent_task_id
             structured["reparse_completed_at"] = local_iso(local_now())
@@ -987,6 +1022,9 @@ Return ONLY the revised fact content in 1-3 precise sentences. Do not add facts 
             output_result = {
                 "fact_id": fact_id,
                 "fact_category": fact.category,
+                "case_title": case_title,
+                "case_type": case_type,
+                "generated_at": local_iso(local_now()),
                 "source_document": doc_name,
                 "reparse_source": source_diagnostics,
                 "knowledge_ref_count": len(knowledge_refs),

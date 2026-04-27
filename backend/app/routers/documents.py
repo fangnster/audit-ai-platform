@@ -585,6 +585,7 @@ async def trigger_parse(doc_id: uuid.UUID, body: Optional[ParseRequest] = None, 
 
     case = await db.get(Case, doc.case_id)
     case_type = case.case_type.value if case and hasattr(case.case_type, 'value') else 'EB1A'
+    case_title = case.title if case else ""
     doc_type_val = doc.doc_type.value if hasattr(doc.doc_type, 'value') else str(doc.doc_type)
     org = await db.get(Organization, case.org_id) if case else None
     org_settings = org.settings if org and org.settings else {}
@@ -630,6 +631,7 @@ async def trigger_parse(doc_id: uuid.UUID, body: Optional[ParseRequest] = None, 
         task_type=AgentTaskType.fact_extract,
         input_params={
             "case_id": str(doc.case_id),
+            "case_title": case_title,
             "document_id": str(doc.id),
             "document_name": doc.original_filename or doc.filename,
             "doc_type": doc_type_val,
@@ -739,9 +741,13 @@ async def export_document_text(doc_id: uuid.UUID, export_format: str = "txt", cu
     Collects all facts extracted from this document and renders them."""
     import io
     from starlette.responses import StreamingResponse
+    from app.models.case import Case
     from app.models.fact import Fact
 
     doc = await _get_document_for_user(doc_id, current_user, db)
+    case = await db.get(Case, doc.case_id)
+    case_title = case.title if case else ""
+    case_type = _enum_text(case.case_type) if case else ""
 
     # Get all facts extracted from this document
     result = await db.execute(
@@ -763,7 +769,11 @@ async def export_document_text(doc_id: uuid.UUID, export_format: str = "txt", cu
 
     if export_format == "md":
         lines = [f"# 文档解析导出 — {doc.original_filename}\n"]
-        lines.append(f"- **导出时间**：{now}")
+        if case_title:
+            lines.append(f"- **案件名称**：{case_title}")
+        if case_type:
+            lines.append(f"- **案件类型**：{case_type}")
+        lines.append(f"- **生成时间**：{now}")
         lines.append(f"- **创建时间**：{local_display(doc.created_at)}")
         lines.append(f"- **修改时间**：{local_display(doc.updated_at or doc.created_at)}")
         lines.append(f"- **原始文件名**：{doc.original_filename}")
@@ -798,7 +808,11 @@ async def export_document_text(doc_id: uuid.UUID, export_format: str = "txt", cu
         )
     else:  # txt
         lines = [f"文档解析导出 — {doc.original_filename}"]
-        lines.append(f"导出时间：{now}")
+        if case_title:
+            lines.append(f"案件名称：{case_title}")
+        if case_type:
+            lines.append(f"案件类型：{case_type}")
+        lines.append(f"生成时间：{now}")
         lines.append(f"创建时间：{local_display(doc.created_at)}")
         lines.append(f"修改时间：{local_display(doc.updated_at or doc.created_at)}")
         lines.append(f"原始文件名：{doc.original_filename}")

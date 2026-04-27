@@ -327,7 +327,7 @@ a:hover { color: var(--accent-hover); }
 
 .notification-history-context div {
   display: grid;
-  grid-template-columns: 58px minmax(0, 1fr);
+  grid-template-columns: 72px minmax(0, 1fr);
   gap: 8px;
   align-items: baseline;
 }
@@ -700,7 +700,7 @@ a:hover { color: var(--accent-hover); }
 .agent-run-object-row {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(112px, 0.34fr) minmax(0, 1fr) minmax(86px, 0.28fr);
+  grid-template-columns: minmax(120px, 0.55fr) minmax(86px, 0.28fr) minmax(112px, 0.42fr) minmax(0, 1fr);
   gap: 6px 12px;
   color: var(--text-muted);
   font-size: 0.72rem;

@@ -92,6 +92,8 @@ export default function CasesPage() {
     category: 'case_task',
     type_name: caseType || t('cases'),
     object_name: name || t('cases'),
+    case_title: name || t('cases'),
+    case_type: caseType,
   })
   const caseActionMeta = (id: string, fallbackName?: string) => {
     const item = findCaseById(id)

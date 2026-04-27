@@ -119,6 +119,8 @@ function CaseTaskSection({ caseInfo, tasks }: { caseInfo: CaseBasic; tasks: Task
     category: 'case_task',
     type_name: task?.task_type && taskTypeLabelKey[task.task_type] ? t(taskTypeLabelKey[task.task_type]) : caseInfo.title,
     object_name: task?.title || caseInfo.title,
+    case_title: caseInfo.title,
+    case_type: caseInfo.case_type,
   })
   const taskMetaById = (id: string) => taskHistoryMeta(tasks.find(item => item.id === id))
   const completeMutation = useMutation({

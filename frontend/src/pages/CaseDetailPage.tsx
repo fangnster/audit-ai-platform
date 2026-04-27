@@ -28,6 +28,8 @@ export default function CaseDetailPage() {
     category: 'case_task',
     type_name: c?.case_type || t('cases'),
     object_name: c?.title || t('cases'),
+    case_title: c?.title,
+    case_type: c?.case_type,
   })
   const updateStatusMutation = useMutation({
     mutationFn: (status: string) => casesApi.update(caseId!, { status }),

@@ -66,6 +66,12 @@ function objectName(item: NotificationHistoryItem, language: string) {
   return sourceLabel(item.path, language)
 }
 
+function caseContext(item: NotificationHistoryItem) {
+  const caseTitle = item.meta?.case_title?.trim()
+  const caseType = item.meta?.case_type?.trim()
+  return [caseTitle ? shortText(caseTitle, 80) : '', caseType || ''].filter(Boolean).join(' · ')
+}
+
 export default function NotificationHistoryButton() {
   const { t, i18n } = useTranslation()
   const [open, setOpen] = useState(false)
@@ -88,7 +94,7 @@ export default function NotificationHistoryButton() {
     return items.filter(item => {
       if (filter !== 'all' && item.type !== filter) return false
       if (!term) return true
-      return `${item.message} ${notificationCategoryLabel(item.category, i18n.language)} ${typeName(item, i18n.language)} ${objectName(item, i18n.language)}`.toLowerCase().includes(term)
+      return `${item.message} ${notificationCategoryLabel(item.category, i18n.language)} ${caseContext(item)} ${typeName(item, i18n.language)} ${objectName(item, i18n.language)}`.toLowerCase().includes(term)
     })
   }, [filter, i18n.language, items, query])
 
@@ -159,6 +165,12 @@ export default function NotificationHistoryButton() {
                     <span>{formatLocalDateTime(item.created_at, i18n.language)}</span>
                   </div>
                   <div className="notification-history-context">
+                    {caseContext(item) && (
+                      <div>
+                        <span>{t('caseTitle')}</span>
+                        <strong>{caseContext(item)}</strong>
+                      </div>
+                    )}
                     <div>
                       <span>{t('notificationCategoryName')}</span>
                       <strong>{notificationCategoryLabel(item.category, i18n.language)}</strong>

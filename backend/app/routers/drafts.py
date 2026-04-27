@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.deps import CurrentUser, DB, ensure_case_member
+from app.models.case import Case
 from app.models.draft import DraftRevision, DraftSection, SectionStatus
 from app.models.agent_task import AgentTask, AgentTaskType, AgentTaskStatus
 from app.models.document import Document
@@ -120,11 +121,25 @@ def _fact_label(fact: Fact) -> str:
     return f"{fact.category} · {content}" if content else fact.category
 
 
+def _enum_text(value) -> str:
+    return str(value.value if hasattr(value, "value") else value)
+
+
+def _case_context(case: Case | None) -> dict[str, str]:
+    if not case:
+        return {}
+    return {
+        "title": case.title,
+        "type": _enum_text(case.case_type),
+    }
+
+
 async def _agent_task_human_context(db: DB, case_id: uuid.UUID, current_user, tasks: list[AgentTask]) -> dict[str, dict]:
     document_ids: set[uuid.UUID] = set()
     fact_ids: set[uuid.UUID] = set()
     section_ids: set[uuid.UUID] = set()
     knowledge_ids: set[uuid.UUID] = set()
+    case_info = _case_context(await db.get(Case, case_id))
 
     for task in tasks:
         input_params = task.input_params or {}
@@ -179,7 +194,7 @@ async def _agent_task_human_context(db: DB, case_id: uuid.UUID, current_user, ta
     for task in tasks:
         input_params = task.input_params or {}
         output_result = task.output_result or {}
-        context: dict = {}
+        context: dict = {"case": case_info} if case_info else {}
 
         document_id = _to_uuid(input_params.get("document_id") or output_result.get("document_id"))
         if document_id and document_id in documents:
@@ -455,6 +470,8 @@ async def generate_drafts(case_id: uuid.UUID, body: GenerateRequest, current_use
     Creates an AgentTask record and dispatches to worker queue.
     """
     await _ensure_case_access(db, case_id, current_user)
+    case = await db.get(Case, case_id)
+    case_info = _case_context(case)
     knowledge_ids = await _validate_user_knowledge_ids(db, body.knowledge_ids, current_user)
     await release_stale_agent_tasks(db, case_id=case_id, task_types=[AgentTaskType.draft_generate], commit=False)
     running_result = await db.execute(
@@ -483,6 +500,8 @@ async def generate_drafts(case_id: uuid.UUID, body: GenerateRequest, current_use
         task_type=AgentTaskType.draft_generate,
         input_params={
             "case_id": str(case_id),
+            "case_title": case_info.get("title", ""),
+            "case_type": case_info.get("type", ""),
             "title": body.title,
             "prompt": body.prompt,
             "strategy": body.strategy,
@@ -594,6 +613,9 @@ async def export_drafts(
     Supported formats: txt, md, docx
     """
     await _ensure_case_access(db, case_id, current_user)
+    case = await db.get(Case, case_id)
+    case_info = _case_context(case)
+    generated_at = local_display()
     query = select(DraftSection).where(
         DraftSection.case_id == case_id,
         DraftSection.is_deleted == False,
@@ -611,7 +633,11 @@ async def export_drafts(
 
     if format == "md":
         lines = [f"# 文案导出 — {version_label}版\n"]
-        lines.append(f"导出时间：{local_display()}\n")
+        if case_info.get("title"):
+            lines.append(f"案件名称：{case_info['title']}")
+        if case_info.get("type"):
+            lines.append(f"案件类型：{case_info['type']}")
+        lines.append(f"生成时间：{generated_at}\n")
         lines.append("---\n")
         for s in sections:
             lines.append(f"## {s.section_title}\n")
@@ -639,7 +665,11 @@ async def export_drafts(
         # Title
         title = doc.add_heading(f"文案导出 — {version_label}版", level=0)
         title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        doc.add_paragraph(f"导出时间：{local_display()}")
+        if case_info.get("title"):
+            doc.add_paragraph(f"案件名称：{case_info['title']}")
+        if case_info.get("type"):
+            doc.add_paragraph(f"案件类型：{case_info['type']}")
+        doc.add_paragraph(f"生成时间：{generated_at}")
         doc.add_paragraph("" )  # spacer
 
         for s in sections:
@@ -663,7 +693,11 @@ async def export_drafts(
 
     else:  # txt default
         lines = [f"文案导出 — {version_label}版"]
-        lines.append(f"导出时间：{local_display()}")
+        if case_info.get("title"):
+            lines.append(f"案件名称：{case_info['title']}")
+        if case_info.get("type"):
+            lines.append(f"案件类型：{case_info['type']}")
+        lines.append(f"生成时间：{generated_at}")
         lines.append("=" * 60)
         for s in sections:
             lines.append(f"\n{s.section_title}")
@@ -690,13 +724,19 @@ async def export_section(
     ):
     """Export a single draft section as a downloadable file."""
     section = await _get_section_for_user(section_id, current_user, db)
+    case = await db.get(Case, section.case_id)
+    case_info = _case_context(case)
 
     now = local_display()
     safe_title = section.section_title.replace("/", "_").replace(" ", "_")[:50]
 
     if format == "md":
         lines = [f"# {section.section_title}\n"]
-        lines.append(f"导出时间：{now}\n")
+        if case_info.get("title"):
+            lines.append(f"案件名称：{case_info['title']}")
+        if case_info.get("type"):
+            lines.append(f"案件类型：{case_info['type']}")
+        lines.append(f"生成时间：{now}\n")
         lines.append(f"创建时间：{local_display(section.created_at)}  |  修改时间：{local_display(section.updated_at)}\n")
         if section.criterion:
             lines.append(f"*Criterion: {section.criterion}*\n")
@@ -718,7 +758,11 @@ async def export_section(
 
         doc = DocxDocument()
         doc.add_heading(section.section_title, level=1)
-        doc.add_paragraph(f"导出时间：{now}")
+        if case_info.get("title"):
+            doc.add_paragraph(f"案件名称：{case_info['title']}")
+        if case_info.get("type"):
+            doc.add_paragraph(f"案件类型：{case_info['type']}")
+        doc.add_paragraph(f"生成时间：{now}")
         doc.add_paragraph(f"创建时间：{local_display(section.created_at)}    修改时间：{local_display(section.updated_at)}")
         if section.criterion:
             p = doc.add_paragraph(f"Criterion: {section.criterion}")
@@ -737,7 +781,11 @@ async def export_section(
 
     else:  # txt
         lines = [section.section_title]
-        lines.append(f"导出时间：{now}")
+        if case_info.get("title"):
+            lines.append(f"案件名称：{case_info['title']}")
+        if case_info.get("type"):
+            lines.append(f"案件类型：{case_info['type']}")
+        lines.append(f"生成时间：{now}")
         lines.append(f"创建时间：{local_display(section.created_at)}  |  修改时间：{local_display(section.updated_at)}")
         lines.append("=" * 40)
         if section.criterion:
@@ -779,6 +827,8 @@ async def rewrite_section(
     Uses Redis distributed lock to prevent concurrent edits.
     """
     section = await _get_section_for_user(section_id, current_user, db)
+    case = await db.get(Case, section.case_id)
+    case_info = _case_context(case)
     knowledge_ids = await _validate_user_knowledge_ids(db, body.knowledge_ids, current_user)
 
     # Create agent task
@@ -786,7 +836,10 @@ async def rewrite_section(
         case_id=section.case_id,
         task_type=AgentTaskType.rewrite_section,
         input_params={
+            "case_title": case_info.get("title", ""),
+            "case_type": case_info.get("type", ""),
             "section_id": str(section_id),
+            "section_title": section.section_title,
             "instruction": body.instruction,
             "strategy": body.strategy,
             "knowledge_ids": knowledge_ids,
@@ -856,6 +909,8 @@ async def generate_rfi(case_id: uuid.UUID, rfi_text: str, current_user: CurrentU
     from app.models.fact import Fact, FactStatus
 
     await _ensure_case_access(db, case_id, current_user)
+    case = await db.get(Case, case_id)
+    case_info = _case_context(case)
     # Get approved facts for context
     result = await db.execute(
         select(Fact).where(
@@ -869,7 +924,12 @@ async def generate_rfi(case_id: uuid.UUID, rfi_text: str, current_user: CurrentU
     agent_task = AgentTask(
         case_id=case_id,
         task_type=AgentTaskType.rfi_generate,
-        input_params={"rfi_text": rfi_text[:500], "fact_count": len(facts)},
+        input_params={
+            "case_title": case_info.get("title", ""),
+            "case_type": case_info.get("type", ""),
+            "rfi_text": rfi_text[:500],
+            "fact_count": len(facts),
+        },
         status=AgentTaskStatus.queued,
         priority=1,
         llm_model="MiniMax-M2.7",
@@ -908,9 +968,13 @@ async def list_agent_tasks(
     )
     tasks = result.scalars().all()
     human_contexts = await _agent_task_human_context(db, case_id, current_user, tasks)
+    case_info = _case_context(await db.get(Case, case_id))
     payload = [
         {
             "id": str(t.id),
+            "case_id": str(case_id),
+            "case_title": case_info.get("title", ""),
+            "case_type": case_info.get("type", ""),
             "task_type": t.task_type,
             "status": str(t.status.value if hasattr(t.status, "value") else t.status),
             "priority": t.priority,

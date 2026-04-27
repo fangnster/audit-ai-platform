@@ -8,7 +8,7 @@ import {
   Edit3, Trash2, BookOpen, Archive,
   Download, ChevronLeft, ChevronRight, Languages, History, Search, ArrowUpDown
 } from 'lucide-react'
-import { draftsApi, sessionsApi, knowledgeApi, factsApi, translateApi } from '../api'
+import { casesApi, draftsApi, sessionsApi, knowledgeApi, factsApi, translateApi } from '../api'
 import { useCaseWebSocket } from '../hooks/useWebSocket'
 import { AiWorkModal } from '../components/AiWorkModal'
 import type { AgentTask } from '../components/AgentRunLogPanel'
@@ -16,6 +16,13 @@ import { ConfirmActionKind, ConfirmActionModal, ObjectLifecycleActions } from '.
 import { formatLocalDateTime } from '../utils/time'
 import { readableLlmError } from '../utils/llmError'
 import { notificationHistoryMeta } from '../utils/notificationHistory'
+import {
+  forgetSubmittedAgentTask,
+  rememberNotifiedAgentTask,
+  rememberSubmittedAgentTask,
+  wasNotifiedAgentTask,
+  wasSubmittedAgentTask,
+} from '../utils/agentTaskNotificationState'
 
 type Section = {
   id: string; version: string; section_order: number;
@@ -108,6 +115,13 @@ export default function DraftsPage() {
   })
   const allSections: Section[] = sectionsData?.data ?? []
 
+  const { data: caseData } = useQuery({
+    queryKey: ['case', caseId],
+    queryFn: () => casesApi.get(caseId!),
+    enabled: Boolean(caseId),
+  })
+  const caseInfo = caseData?.data
+
   // Trash query
   const { data: trashData, isLoading: trashLoading } = useQuery({
     queryKey: ['drafts-trash', caseId, draftSortOrder],
@@ -198,6 +212,8 @@ export default function DraftsPage() {
     category,
     type_name: typeName,
     object_name: objectName || t('aiDraftGeneration'),
+    case_title: caseInfo?.title,
+    case_type: caseInfo?.case_type,
   })
   const findSectionById = (id: string) => [...allSections, ...trashSections].find(item => item.id === id)
   const sectionHistoryMeta = (sectionId: string, fallbackName?: string) => {
@@ -235,8 +251,9 @@ export default function DraftsPage() {
         const taskId = String(task.id)
         const previousStatus = draftTaskStatusRef.current[taskId]
         const isTerminal = task.status === 'completed' || task.status === 'failed'
-        const wasSubmittedHere = submittedDraftTaskIdsRef.current.has(taskId)
-        const shouldNotify = isTerminal && !notifiedDraftTaskIdsRef.current.has(taskId) && (
+        const wasSubmittedHere = submittedDraftTaskIdsRef.current.has(taskId) || wasSubmittedAgentTask('draft_work', taskId)
+        const alreadyNotified = notifiedDraftTaskIdsRef.current.has(taskId) || wasNotifiedAgentTask('draft_work', taskId)
+        const shouldNotify = isTerminal && !alreadyNotified && (
           wasSubmittedHere || (previousStatus && previousStatus !== task.status)
         )
         if (shouldNotify) {
@@ -253,11 +270,13 @@ export default function DraftsPage() {
             toast.error(t(key, { name, reason: reason ? `${reasonPrefix}${reason}` : '' }), meta)
           }
           notifiedDraftTaskIdsRef.current.add(taskId)
+          rememberNotifiedAgentTask('draft_work', taskId)
           submittedDraftTaskIdsRef.current.delete(taskId)
+          forgetSubmittedAgentTask('draft_work', taskId)
         }
         draftTaskStatusRef.current[taskId] = task.status
       })
-  }, [draftTaskSignature, i18n.language])
+  }, [draftTaskSignature, i18n.language, caseInfo?.title, caseInfo?.case_type])
 
   const generateMutation = useMutation({
     mutationFn: () => draftsApi.generate(caseId!, genTitle, genPrompt, genStrategy, selectedKnowledgeIds, selectedFactIds),
@@ -268,11 +287,18 @@ export default function DraftsPage() {
         toast.error(t('draftTaskAlreadyRunning', { name }), draftHistoryMeta(t('agentTaskDraftGenerate'), name, 'agent_draft'))
       } else if (taskId) {
         submittedDraftTaskIdsRef.current.add(String(taskId))
+        rememberSubmittedAgentTask('draft_work', String(taskId))
         draftTaskStatusRef.current[String(taskId)] = String(res.data?.status || 'queued')
         const name = draftSubmissionName(String(res.data?.draft_name || genTitle), genPrompt)
         toast.success(
           t('generatedQueued', { name }),
-          notificationHistoryMeta({ category: 'task_submission', type_name: t('agentTaskDraftGenerate'), object_name: name }),
+          notificationHistoryMeta({
+            category: 'task_submission',
+            type_name: t('agentTaskDraftGenerate'),
+            object_name: name,
+            case_title: caseInfo?.title,
+            case_type: caseInfo?.case_type,
+          }),
         )
       }
       qc.invalidateQueries({ queryKey: ['agentTasks', caseId] })
@@ -292,6 +318,7 @@ export default function DraftsPage() {
       const taskId = res.data?.agent_task_id
       if (taskId) {
         submittedDraftTaskIdsRef.current.add(String(taskId))
+        rememberSubmittedAgentTask('draft_work', String(taskId))
         draftTaskStatusRef.current[String(taskId)] = String(res.data?.status || 'queued')
       }
       resetRewriteState()

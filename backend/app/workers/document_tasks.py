@@ -103,6 +103,7 @@ def parse_document(self, document_id: str, file_path: str, mime_type: str,
 
     agent = None
     temp_path = ""
+    case_title = ""
     started_at = time.perf_counter()
     try:
         with Session(engine) as session:
@@ -134,6 +135,7 @@ def parse_document(self, document_id: str, file_path: str, mime_type: str,
             delete_pattern_sync("admin:v1:*")
 
             case = session.get(Case, uuid.UUID(case_id))
+            case_title = case.title if case else ""
             org = session.get(Organization, case.org_id) if case else None
             org_settings = org.settings if org and org.settings else {}
 
@@ -163,9 +165,13 @@ def parse_document(self, document_id: str, file_path: str, mime_type: str,
 
             # Persist facts
             inserted = 0
+            generated_at = local_iso(local_now())
             for f in raw_facts:
                 structured = dict(f.get("structured_data") or {})
                 structured.setdefault("document_name", doc.original_filename or doc.filename)
+                structured.setdefault("case_title", case_title)
+                structured.setdefault("case_type", case_type)
+                structured.setdefault("generated_at", generated_at)
                 if lawyer_guidance:
                     structured["parse_prompt"] = lawyer_guidance
                 fact = Fact(
@@ -185,7 +191,9 @@ def parse_document(self, document_id: str, file_path: str, mime_type: str,
                 "document_id": document_id,
                 "document_name": doc.original_filename or doc.filename,
                 "doc_type": doc_type,
+                "case_title": case_title,
                 "case_type": case_type,
+                "generated_at": generated_at,
                 "facts_extracted": inserted,
                 "fact_categories": _category_counts(raw_facts),
                 "prompt_used": bool(lawyer_guidance),
@@ -197,6 +205,9 @@ def parse_document(self, document_id: str, file_path: str, mime_type: str,
             doc.extracted_metadata = {
                 "fact_count": inserted,
                 "mode": "llm_background_trigger",
+                "case_title": case_title,
+                "case_type": case_type,
+                "generated_at": generated_at,
                 "prompt": lawyer_guidance or None,
                 "parsed_at": local_iso(local_now()),
                 "diagnostics": diagnostics,
@@ -230,6 +241,9 @@ def parse_document(self, document_id: str, file_path: str, mime_type: str,
                     doc.extracted_metadata = {
                         "fact_count": 0,
                         "mode": "llm_background_trigger",
+                        "case_title": case_title,
+                        "case_type": case_type,
+                        "generated_at": local_iso(local_now()),
                         "prompt": lawyer_guidance or None,
                         "parsed_at": local_iso(local_now()),
                         "diagnostics": diagnostics,
@@ -243,8 +257,11 @@ def parse_document(self, document_id: str, file_path: str, mime_type: str,
                             "document_id": document_id,
                             "document_name": doc.original_filename or doc.filename,
                             "doc_type": doc_type,
+                            "case_title": case_title,
+                            "case_type": case_type,
                             "facts_extracted": 0,
                             "diagnostics": diagnostics,
+                            "generated_at": local_iso(local_now()),
                             "error": str(exc),
                         },
                         error_message=str(exc),
@@ -267,6 +284,18 @@ def parse_document(self, document_id: str, file_path: str, mime_type: str,
                 if doc:
                     doc.parse_status = ParseStatus.failed
                     final = self.request.retries >= self.max_retries
+                    diagnostics = dict(agent.last_diagnostics or {}) if agent else {}
+                    doc.extracted_metadata = {
+                        "fact_count": 0,
+                        "mode": "llm_background_trigger",
+                        "case_title": case_title,
+                        "case_type": case_type,
+                        "generated_at": local_iso(local_now()),
+                        "prompt": lawyer_guidance or None,
+                        "parsed_at": local_iso(local_now()),
+                        "diagnostics": diagnostics,
+                        "error": str(exc),
+                    }
                     _mark_agent_task(
                         session,
                         agent_task_id,
@@ -275,8 +304,11 @@ def parse_document(self, document_id: str, file_path: str, mime_type: str,
                             "document_id": document_id,
                             "document_name": doc.original_filename or doc.filename,
                             "doc_type": doc_type,
+                            "case_title": case_title,
+                            "case_type": case_type,
                             "facts_extracted": 0,
-                            "diagnostics": dict(agent.last_diagnostics or {}) if agent else {},
+                            "diagnostics": diagnostics,
+                            "generated_at": local_iso(local_now()),
                             "error": str(exc),
                         },
                         error_message=str(exc),

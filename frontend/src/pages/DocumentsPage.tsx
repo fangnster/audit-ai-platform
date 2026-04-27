@@ -10,13 +10,20 @@ import {
   FolderOpen, Award, BookOpen, FileText, Users, Mic, Shield, Mail, Archive, Wand2, Search,
   Settings, Plus, Save, X, Sparkles
 } from 'lucide-react'
-import { docsApi, draftsApi, knowledgeApi } from '../api'
+import { casesApi, docsApi, draftsApi, knowledgeApi } from '../api'
 import { AiWorkModal } from '../components/AiWorkModal'
 import type { AgentTask } from '../components/AgentRunLogPanel'
 import { ConfirmActionKind, ConfirmActionModal, ObjectLifecycleActions } from '../components/ObjectLifecycleActions'
 import { formatLocalDateTime } from '../utils/time'
 import { readableLlmError } from '../utils/llmError'
 import { notificationHistoryMeta } from '../utils/notificationHistory'
+import {
+  forgetSubmittedAgentTask,
+  rememberNotifiedAgentTask,
+  rememberSubmittedAgentTask,
+  wasNotifiedAgentTask,
+  wasSubmittedAgentTask,
+} from '../utils/agentTaskNotificationState'
 
 type DocTypeOption = { id: string; label: string; icon?: string; enabled?: boolean; builtin?: boolean }
 
@@ -171,6 +178,13 @@ export default function DocumentsPage() {
   })
   const allDocs: any[] = data?.data ?? []
 
+  const { data: caseData } = useQuery({
+    queryKey: ['case', caseId],
+    queryFn: () => casesApi.get(caseId!),
+    enabled: Boolean(caseId),
+  })
+  const caseInfo = caseData?.data
+
   const { data: agentTasksData } = useQuery({
     queryKey: ['agentTasks', caseId, 'documents'],
     queryFn: () => draftsApi.agentTasks(caseId!, { sort_order: 'desc' }),
@@ -218,8 +232,9 @@ export default function DocumentsPage() {
         const taskId = String(task.id)
         const previousStatus = parseTaskStatusRef.current[taskId]
         const isTerminal = task.status === 'completed' || task.status === 'failed'
-        const wasSubmittedHere = submittedParseTaskIdsRef.current.has(taskId)
-        const shouldNotify = isTerminal && !notifiedParseTaskIdsRef.current.has(taskId) && (
+        const wasSubmittedHere = submittedParseTaskIdsRef.current.has(taskId) || wasSubmittedAgentTask('document_parse', taskId)
+        const alreadyNotified = notifiedParseTaskIdsRef.current.has(taskId) || wasNotifiedAgentTask('document_parse', taskId)
+        const shouldNotify = isTerminal && !alreadyNotified && (
           wasSubmittedHere || (previousStatus && previousStatus !== task.status)
         )
         if (shouldNotify) {
@@ -235,11 +250,13 @@ export default function DocumentsPage() {
             toast.error(t('parseTaskFailedToast', { name, reason: reason ? `${reasonPrefix}${reason}` : '' }), meta)
           }
           notifiedParseTaskIdsRef.current.add(taskId)
+          rememberNotifiedAgentTask('document_parse', taskId)
           submittedParseTaskIdsRef.current.delete(taskId)
+          forgetSubmittedAgentTask('document_parse', taskId)
         }
         parseTaskStatusRef.current[taskId] = task.status
       })
-  }, [parseTaskSignature, i18n.language])
+  }, [parseTaskSignature, i18n.language, caseInfo?.title, caseInfo?.case_type])
 
   const { data: trashData } = useQuery({
     queryKey: ['docs', caseId, 'trash'],
@@ -277,6 +294,8 @@ export default function DocumentsPage() {
     category,
     type_name: typeId ? docTypeLabel(typeId) : t('itemDocument'),
     object_name: filename,
+    case_title: caseInfo?.title,
+    case_type: caseInfo?.case_type,
   })
   const findDocById = (docId: string) => [...allDocs, ...trashDocs].find(item => item.id === docId)
   const docActionMeta = (docId: string, fallbackName?: string) => {
@@ -343,7 +362,13 @@ export default function DocumentsPage() {
     if (!cleaned.some(item => item.enabled)) {
       toast.error(
         t('documentTypesNeedOne'),
-        notificationHistoryMeta({ category: 'document', type_name: t('documentTypeSettings'), object_name: t('documentTypeSettings') }),
+        notificationHistoryMeta({
+          category: 'document',
+          type_name: t('documentTypeSettings'),
+          object_name: t('documentTypeSettings'),
+          case_title: caseInfo?.title,
+          case_type: caseInfo?.case_type,
+        }),
       )
       return
     }
@@ -353,14 +378,26 @@ export default function DocumentsPage() {
       await docsApi.updateTypes(cleaned)
       toast.success(
         t('documentTypesSaved'),
-        notificationHistoryMeta({ category: 'document', type_name: t('documentTypeSettings'), object_name: t('documentTypeSettings') }),
+        notificationHistoryMeta({
+          category: 'document',
+          type_name: t('documentTypeSettings'),
+          object_name: t('documentTypeSettings'),
+          case_title: caseInfo?.title,
+          case_type: caseInfo?.case_type,
+        }),
       )
       qc.invalidateQueries({ queryKey: ['document-types'] })
       setShowTypeSettings(false)
     } catch (e: any) {
       toast.error(
         e?.response?.data?.detail || t('error'),
-        notificationHistoryMeta({ category: 'document', type_name: t('documentTypeSettings'), object_name: t('documentTypeSettings') }),
+        notificationHistoryMeta({
+          category: 'document',
+          type_name: t('documentTypeSettings'),
+          object_name: t('documentTypeSettings'),
+          case_title: caseInfo?.title,
+          case_type: caseInfo?.case_type,
+        }),
       )
     } finally {
       setSavingTypes(false)
@@ -409,10 +446,17 @@ export default function DocumentsPage() {
         toast.error(t('parseTaskAlreadyRunning'), parseMeta)
       } else if (taskId) {
         submittedParseTaskIdsRef.current.add(String(taskId))
+        rememberSubmittedAgentTask('document_parse', String(taskId))
         parseTaskStatusRef.current[String(taskId)] = String(res.data?.status || 'queued')
         toast.success(
           t('parseQueued', { name: parseDocName }),
-          notificationHistoryMeta({ category: 'task_submission', type_name: t('agentRunCategoryFileParse'), object_name: parseDocName }),
+          notificationHistoryMeta({
+            category: 'task_submission',
+            type_name: t('agentRunCategoryFileParse'),
+            object_name: parseDocName,
+            case_title: caseInfo?.title,
+            case_type: caseInfo?.case_type,
+          }),
         )
       }
       qc.invalidateQueries({ queryKey: ['docs', caseId] })

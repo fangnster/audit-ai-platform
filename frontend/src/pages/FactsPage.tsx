@@ -8,13 +8,20 @@ import {
   ChevronLeft, ChevronRight, ArrowUpDown, RefreshCw, ClipboardList,
   Archive, Languages, Clock, BookOpen, Search, Wand2
 } from 'lucide-react'
-import { draftsApi, factsApi, tasksApi, translateApi, knowledgeApi } from '../api'
+import { casesApi, draftsApi, factsApi, tasksApi, translateApi, knowledgeApi } from '../api'
 import { AiWorkModal } from '../components/AiWorkModal'
 import type { AgentTask } from '../components/AgentRunLogPanel'
 import { ConfirmActionKind, ConfirmActionModal, ObjectLifecycleActions } from '../components/ObjectLifecycleActions'
 import { formatLocalDateTime } from '../utils/time'
 import { readableLlmError } from '../utils/llmError'
 import { notificationHistoryMeta } from '../utils/notificationHistory'
+import {
+  forgetSubmittedAgentTask,
+  rememberNotifiedAgentTask,
+  rememberSubmittedAgentTask,
+  wasNotifiedAgentTask,
+  wasSubmittedAgentTask,
+} from '../utils/agentTaskNotificationState'
 
 const CAT_COLORS: Record<string, string> = {
   award: '#f0c060', patent: '#60a5fa', publication: '#34d399',
@@ -82,6 +89,13 @@ export default function FactsPage() {
 
   const displayFacts = viewMode === 'active' ? allFacts : trashFacts
 
+  const { data: caseData } = useQuery({
+    queryKey: ['case', caseId],
+    queryFn: () => casesApi.get(caseId!),
+    enabled: Boolean(caseId),
+  })
+  const caseInfo = caseData?.data
+
   // Filter + Sort + Paginate
   const filtered = catFilter ? displayFacts.filter(f => f.category === catFilter) : displayFacts
   const sorted = [...filtered].sort((a, b) => {
@@ -100,6 +114,8 @@ export default function FactsPage() {
     category,
     type_name: fact?.category || t('agentRunCategoryFactReparse'),
     object_name: fact?.content?.substring(0, 120) || t('itemFact'),
+    case_title: caseInfo?.title,
+    case_type: caseInfo?.case_type,
   })
 
   const { data: disputeKnowledgeData } = useQuery({
@@ -144,8 +160,9 @@ export default function FactsPage() {
         const taskId = String(task.id)
         const previousStatus = factTaskStatusRef.current[taskId]
         const isTerminal = task.status === 'completed' || task.status === 'failed'
-        const wasSubmittedHere = submittedFactTaskIdsRef.current.has(taskId)
-        const shouldNotify = isTerminal && !notifiedFactTaskIdsRef.current.has(taskId) && (
+        const wasSubmittedHere = submittedFactTaskIdsRef.current.has(taskId) || wasSubmittedAgentTask('fact_reparse', taskId)
+        const alreadyNotified = notifiedFactTaskIdsRef.current.has(taskId) || wasNotifiedAgentTask('fact_reparse', taskId)
+        const shouldNotify = isTerminal && !alreadyNotified && (
           wasSubmittedHere || (previousStatus && previousStatus !== task.status)
         )
         if (shouldNotify) {
@@ -156,7 +173,13 @@ export default function FactsPage() {
             t('itemFact'),
           ).substring(0, 120)
           const factCategory = String(task.human_context?.fact?.category || task.input_params?.fact_category || t('agentRunCategoryFactReparse'))
-          const meta = notificationHistoryMeta({ category: 'agent_fact', type_name: factCategory, object_name: factTitle })
+          const meta = notificationHistoryMeta({
+            category: 'agent_fact',
+            type_name: factCategory,
+            object_name: factTitle,
+            case_title: caseInfo?.title,
+            case_type: caseInfo?.case_type,
+          })
           if (task.status === 'completed') {
             toast.success(t('factReparseCompletedToast', { name: factTitle }), meta)
           } else {
@@ -165,11 +188,13 @@ export default function FactsPage() {
             toast.error(t('factReparseFailedToast', { name: factTitle, reason: reason ? `${reasonPrefix}${reason}` : '' }), meta)
           }
           notifiedFactTaskIdsRef.current.add(taskId)
+          rememberNotifiedAgentTask('fact_reparse', taskId)
           submittedFactTaskIdsRef.current.delete(taskId)
+          forgetSubmittedAgentTask('fact_reparse', taskId)
         }
         factTaskStatusRef.current[taskId] = task.status
       })
-  }, [factTaskSignature, i18n.language])
+  }, [factTaskSignature, i18n.language, caseInfo?.title, caseInfo?.case_type])
 
   const approveMutation = useMutation({
     mutationFn: (id: string) => factsApi.approve(id),
@@ -188,6 +213,7 @@ export default function FactsPage() {
       const taskId = res.data?.agent_task_id
       if (taskId) {
         submittedFactTaskIdsRef.current.add(String(taskId))
+        rememberSubmittedAgentTask('fact_reparse', String(taskId))
         factTaskStatusRef.current[String(taskId)] = String(res.data?.status || 'queued')
       }
       qc.invalidateQueries({ queryKey: ['facts', caseId] })
@@ -216,6 +242,8 @@ export default function FactsPage() {
           category: 'case_task',
           type_name: t('requestEvidence'),
           object_name: disputeFact?.content?.substring(0, 120) || t('itemFact'),
+          case_title: caseInfo?.title,
+          case_type: caseInfo?.case_type,
         }),
       )
       qc.invalidateQueries({ queryKey: ['tasks', caseId] })

@@ -343,12 +343,15 @@ function businessObject(task: AgentTask, language: string, t: (key: string) => s
   const document = human.document || {}
   const fact = human.fact || {}
   const sectionInfo = human.section || {}
+  const caseInfo = human.case || {}
+  const caseTitle = compactText(task.case_title || caseInfo.title || input.case_title || output.case_title || '-', language, 70)
   const caseType = compactText(task.case_type || input.case_type || output.case_type || '-', language, 40)
 
   if (task.task_type === 'fact_extract') {
     return {
       typeName: docTypeName(document.type || summary.doc_type || output.doc_type || input.doc_type, t, docTypeLabels) || t('agentTaskFactExtract'),
       objectName: compactText(document.name || summary.document_name || output.document_name || input.document_name || t('itemDocument'), language),
+      caseTitle,
       caseType,
     }
   }
@@ -356,6 +359,7 @@ function businessObject(task: AgentTask, language: string, t: (key: string) => s
     return {
       typeName: compactText(fact.category || summary.fact_category || input.fact_category || t('agentTaskFactReparse'), language, 56),
       objectName: compactText(fact.content || fact.title || input.original_content || output.original_content || t('itemFact'), language),
+      caseTitle,
       caseType,
     }
   }
@@ -363,6 +367,7 @@ function businessObject(task: AgentTask, language: string, t: (key: string) => s
     return {
       typeName: t('agentTaskDraftGenerate'),
       objectName: compactText(input.title || summary.title || t('aiDraftGeneration'), language),
+      caseTitle,
       caseType,
     }
   }
@@ -370,12 +375,14 @@ function businessObject(task: AgentTask, language: string, t: (key: string) => s
     return {
       typeName: t('agentTaskRewriteSection'),
       objectName: compactText(sectionInfo.title || output.section_title || summary.section_title || t('agentTaskRewriteSection'), language),
+      caseTitle,
       caseType,
     }
   }
   return {
     typeName: typeLabelKey[task.task_type] ? t(typeLabelKey[task.task_type]) : task.task_type,
     objectName: compactText(input.title || output.title || summary.title || task.case_title || '-', language),
+    caseTitle,
     caseType,
   }
 }
@@ -439,16 +446,20 @@ export function AgentRunLogPanel({ tasks, maxItems = 8, title, compact = false, 
                   </span>
                   <span className="agent-run-object-row">
                     <span>
+                      <span>{labelFor('case_title', language)}</span>
+                      <strong>{object.caseTitle}</strong>
+                    </span>
+                    <span>
+                      <span>{labelFor('case_type', language)}</span>
+                      <strong>{object.caseType}</strong>
+                    </span>
+                    <span>
                       <span>{t('notificationTypeName')}</span>
                       <strong>{object.typeName}</strong>
                     </span>
                     <span>
                       <span>{t('notificationObjectName')}</span>
                       <strong>{object.objectName}</strong>
-                    </span>
-                    <span>
-                      <span>{labelFor('case_type', language)}</span>
-                      <strong>{object.caseType}</strong>
                     </span>
                   </span>
                 </span>

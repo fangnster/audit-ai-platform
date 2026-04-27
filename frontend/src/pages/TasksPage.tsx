@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import toast from 'react-hot-toast'
 import { CheckSquare, Clock, CheckCircle, RotateCcw, Trash2, ArrowUpDown } from 'lucide-react'
-import { tasksApi } from '../api'
+import { casesApi, tasksApi } from '../api'
 import { formatLocalDateTime } from '../utils/time'
 import { notificationHistoryMeta } from '../utils/notificationHistory'
 
@@ -44,6 +44,12 @@ export default function TasksPage() {
     queryKey: ['tasks', caseId, sortOrder],
     queryFn: () => tasksApi.list(caseId!, { sort_by: 'updated_at', sort_order: sortOrder }),
   })
+  const { data: caseData } = useQuery({
+    queryKey: ['case', caseId],
+    queryFn: () => casesApi.get(caseId!),
+    enabled: Boolean(caseId),
+  })
+  const caseInfo = caseData?.data
   const tasks: Task[] = [...(data?.data ?? [])].sort((a, b) => {
     const av = new Date(a.updated_at || a.created_at || 0).getTime()
     const bv = new Date(b.updated_at || b.created_at || 0).getTime()
@@ -53,6 +59,8 @@ export default function TasksPage() {
     category: 'case_task',
     type_name: task?.task_type && taskTypeLabelKey[task.task_type] ? t(taskTypeLabelKey[task.task_type]) : t('caseTasks'),
     object_name: task?.title || t('caseTasks'),
+    case_title: caseInfo?.title,
+    case_type: caseInfo?.case_type,
   })
   const taskMetaById = (id: string) => taskHistoryMeta(tasks.find(item => item.id === id))
 

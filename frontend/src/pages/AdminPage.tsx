@@ -198,6 +198,8 @@ export default function AdminPage() {
     category: 'case_task',
     type_name: item?.case_type || '案件',
     object_name: item?.title || '案件',
+    case_title: item?.title,
+    case_type: item?.case_type,
   })
   const findAdminUser = (id: string) => users.find(user => user.id === id)
   const findAdminCase = (id: string) => cases.find(item => item.id === id)
