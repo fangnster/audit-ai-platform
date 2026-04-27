@@ -335,13 +335,14 @@ export function AgentRunLogPanel({ tasks, maxItems = 8, title, compact = false, 
   const { t, i18n } = useTranslation()
   const language = i18n.language
   const visibleTasks = useMemo(() => tasks.slice(0, maxItems), [tasks, maxItems])
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set(visibleTasks.slice(0, 1).map(task => task.id)))
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set())
 
   useEffect(() => {
-    if (visibleTasks.length === 0) return
-    setExpandedIds(prev => (
-      visibleTasks.some(task => prev.has(task.id)) ? prev : new Set([visibleTasks[0].id])
-    ))
+    const visibleIds = new Set(visibleTasks.map(task => task.id))
+    setExpandedIds(prev => {
+      const next = new Set([...prev].filter(id => visibleIds.has(id)))
+      return next.size === prev.size ? prev : next
+    })
   }, [visibleTasks])
 
   if (tasks.length === 0) return null
