@@ -742,6 +742,67 @@ a:hover { color: var(--accent-hover); }
   background: rgba(37,99,235,0.06);
 }
 
+.document-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.document-table {
+  min-width: 1080px;
+  table-layout: fixed;
+}
+
+.document-file-col { width: 32%; }
+.document-type-col { width: 150px; }
+.document-status-col { width: 190px; }
+.document-time-col { width: 230px; }
+.document-actions-col { width: 360px; }
+
+.document-file-name,
+.document-parse-status,
+.document-action-row {
+  display: flex;
+  align-items: center;
+}
+
+.document-file-name {
+  min-width: 0;
+  gap: 8px;
+}
+
+.document-file-name svg,
+.document-file-name > span:first-child {
+  flex-shrink: 0;
+}
+
+.document-file-name > span:last-child,
+.document-type-cell .badge {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.document-type-cell .badge {
+  max-width: 100%;
+}
+
+.document-parse-status {
+  gap: 6px;
+  font-size: 0.8rem;
+}
+
+.document-time-cell {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.document-action-row {
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
 /* ── Fact chip ───────────────────────────── */
 .fact-item {
   background: var(--bg-700);

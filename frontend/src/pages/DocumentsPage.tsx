@@ -541,75 +541,87 @@ export default function DocumentsPage() {
           </div>
         ) : (
           <>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('filename')}>{t('filename')}{sortIndicator('filename')}</th>
-                  <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('doc_type')}>{t('type')}{sortIndicator('doc_type')}</th>
-                  <th>{t('parseStatus')}</th>
-                  <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('created_at')}>{t('time')}{sortIndicator('created_at')}</th>
-                  <th style={{ width: 380 }}>{t('actions')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {docs.map((d: any) => {
-                  const isParseRunning = d.parse_status === 'parsing' || runningParseDocIds.has(d.id)
-                  return (
-                  <tr key={d.id}>
-                    <td style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      {renderDocTypeIcon(d.doc_type)} {d.filename}
-                    </td>
-                    <td><span className="badge badge-blue">{docTypeLabel(d.doc_type)}</span></td>
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        {PARSE_STATUS_ICONS[d.parse_status]}
-                        <span style={{ fontSize: '0.8rem' }}>{PARSE_LABEL_KEYS[d.parse_status] ? t(PARSE_LABEL_KEYS[d.parse_status]) : d.parse_status}</span>
-                      </div>
-                      {renderParseDiagnostics(d)}
-                    </td>
-                    <td style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                      <div>{t('updatedAt')}: {formatLocalDateTime(d.updated_at || d.created_at, i18n.language)}</div>
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', gap: 4 }}>
-                        {viewMode === 'active' ? (
-                          <>
-                            <button className="btn btn-ghost btn-sm" onClick={() => openParseDialog(d.id, d.filename)}
-                              disabled={isParseRunning}
-                              title={isParseRunning ? t('parseTaskAlreadyRunning') : d.parse_status === 'parsed' ? t('reparse') : t('aiParse')}>
-                              {isParseRunning ? <span className="spinner" /> : <Wand2 size={13} />}
-                              {isParseRunning ? t('parseParsing') : d.parse_status === 'parsed' ? t('reparse') : t('parse')}
-                            </button>
-                            <button className="btn btn-ghost btn-sm" onClick={() => downloadDoc(d.id, d.filename)}
-                              disabled={(d.file_size ?? 0) <= 0}
-                              title={(d.file_size ?? 0) <= 0 ? t('fileEmptyReupload') : t('downloadOriginal')}>
-                              <Download size={13} /> {t('originalFile')}
-                            </button>
-                            <button className="btn btn-ghost btn-sm" onClick={() => exportDocText(d.id, d.filename)}
-                              title={t('exportParsedText')}>
-                              <FileText size={13} /> {t('parsedText')}
-                            </button>
+            <div className="document-table-scroll">
+              <table className="table document-table">
+                <colgroup>
+                  <col className="document-file-col" />
+                  <col className="document-type-col" />
+                  <col className="document-status-col" />
+                  <col className="document-time-col" />
+                  <col className="document-actions-col" />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('filename')}>{t('filename')}{sortIndicator('filename')}</th>
+                    <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('doc_type')}>{t('type')}{sortIndicator('doc_type')}</th>
+                    <th>{t('parseStatus')}</th>
+                    <th style={{ cursor: 'pointer' }} onClick={() => toggleSort('created_at')}>{t('time')}{sortIndicator('created_at')}</th>
+                    <th>{t('actions')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {docs.map((d: any) => {
+                    const isParseRunning = d.parse_status === 'parsing' || runningParseDocIds.has(d.id)
+                    return (
+                    <tr key={d.id}>
+                      <td>
+                        <div className="document-file-name" title={d.filename}>
+                          {renderDocTypeIcon(d.doc_type)}
+                          <span>{d.filename}</span>
+                        </div>
+                      </td>
+                      <td className="document-type-cell"><span className="badge badge-blue">{docTypeLabel(d.doc_type)}</span></td>
+                      <td>
+                        <div className="document-parse-status">
+                          {PARSE_STATUS_ICONS[d.parse_status]}
+                          <span>{PARSE_LABEL_KEYS[d.parse_status] ? t(PARSE_LABEL_KEYS[d.parse_status]) : d.parse_status}</span>
+                        </div>
+                        {renderParseDiagnostics(d)}
+                      </td>
+                      <td className="document-time-cell">
+                        <div>{t('updatedAt')}: {formatLocalDateTime(d.updated_at || d.created_at, i18n.language)}</div>
+                      </td>
+                      <td>
+                        <div className="document-action-row">
+                          {viewMode === 'active' ? (
+                            <>
+                              <button className="btn btn-ghost btn-sm" onClick={() => openParseDialog(d.id, d.filename)}
+                                disabled={isParseRunning}
+                                title={isParseRunning ? t('parseTaskAlreadyRunning') : d.parse_status === 'parsed' ? t('reparse') : t('aiParse')}>
+                                {isParseRunning ? <span className="spinner" /> : <Wand2 size={13} />}
+                                {isParseRunning ? t('parseParsing') : d.parse_status === 'parsed' ? t('reparse') : t('parse')}
+                              </button>
+                              <button className="btn btn-ghost btn-sm" onClick={() => downloadDoc(d.id, d.filename)}
+                                disabled={(d.file_size ?? 0) <= 0}
+                                title={(d.file_size ?? 0) <= 0 ? t('fileEmptyReupload') : t('downloadOriginal')}>
+                                <Download size={13} /> {t('originalFile')}
+                              </button>
+                              <button className="btn btn-ghost btn-sm" onClick={() => exportDocText(d.id, d.filename)}
+                                title={t('exportParsedText')}>
+                                <FileText size={13} /> {t('parsedText')}
+                              </button>
+                              <ObjectLifecycleActions
+                                mode="active"
+                                onTrash={() => setConfirmAction({ kind: 'trash', id: d.id, name: d.filename })}
+                                onRestore={() => restoreDoc(d.id)}
+                                onPermanentDelete={() => setConfirmAction({ kind: 'permanent', id: d.id, name: d.filename })}
+                              />
+                            </>
+                          ) : (
                             <ObjectLifecycleActions
-                              mode="active"
+                              mode="trash"
                               onTrash={() => setConfirmAction({ kind: 'trash', id: d.id, name: d.filename })}
                               onRestore={() => restoreDoc(d.id)}
                               onPermanentDelete={() => setConfirmAction({ kind: 'permanent', id: d.id, name: d.filename })}
                             />
-                          </>
-                        ) : (
-                          <ObjectLifecycleActions
-                            mode="trash"
-                            onTrash={() => setConfirmAction({ kind: 'trash', id: d.id, name: d.filename })}
-                            onRestore={() => restoreDoc(d.id)}
-                            onPermanentDelete={() => setConfirmAction({ kind: 'permanent', id: d.id, name: d.filename })}
-                          />
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                )})}
-              </tbody>
-            </table>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )})}
+                </tbody>
+              </table>
+            </div>
 
             {/* Pagination — always visible */}
             <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, padding: '12px 0', borderTop: '1px solid var(--border)' }}>
