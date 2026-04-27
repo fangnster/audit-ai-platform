@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ImmigrationAI 项目文档</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f5f7fb;
+        --panel: #ffffff;
+        --text: #172033;
+        --muted: #64748b;
+        --border: rgba(24, 36, 56, 0.12);
+        --accent: #2563eb;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: Inter, "Noto Sans SC", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: radial-gradient(circle at 18% 0%, rgba(37, 99, 235, 0.1), transparent 30%), var(--bg);
+        color: var(--text);
+      }
+      main {
+        width: min(880px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 56px 0;
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: 28px;
+        line-height: 1.25;
+      }
+      p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.7;
+      }
+      .list {
+        display: grid;
+        gap: 14px;
+        margin-top: 28px;
+      }
+      a {
+        display: block;
+        padding: 18px 20px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--panel);
+        color: inherit;
+        text-decoration: none;
+        box-shadow: 0 8px 24px rgba(24, 36, 56, 0.08);
+      }
+      a:hover {
+        border-color: rgba(37, 99, 235, 0.4);
+      }
+      strong {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--accent);
+        font-size: 16px;
+      }
+      span {
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.6;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>ImmigrationAI 项目文档</h1>
+      <p>这里集中放置给试用律师和协作方阅读的公开说明文档。Markdown 文件会以浏览器原始文本形式打开。</p>
+      <div class="list">
+        <a href="./platform-v1.md">
+          <strong>AI Agent 移民律师协作平台 V1</strong>
+          <span>平台定位、核心流程、功能模块和试用说明。</span>
+        </a>
+        <a href="./lawyer-user-manual.md">
+          <strong>律师使用手册</strong>
+          <span>案件创建、文件解析、事实审核、文案生成、告警和 Agent 运行记录的操作指引。</span>
+        </a>
+        <a href="./readme.md">
+          <strong>README</strong>
+          <span>项目概览、本地启动、部署结构和维护入口。</span>
+        </a>
+        <a href="./product-requirements.md">
+          <strong>产品需求文档</strong>
+          <span>按当前实现整理的平台业务需求和功能边界。</span>
+        </a>
+      </div>
+    </main>
+  </body>
+</html>
