@@ -1,11 +1,14 @@
 import pytest
 import uuid
+import sys
+import types
 from datetime import datetime, timedelta, timezone
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import delete as sa_delete
 
 from app.config import settings
 from app.database import AsyncSessionLocal, engine
+from app.agents import fact_extractor
 from app.agents.fact_extractor import DocumentTextExtractionError, FactExtractionAgent
 from app.main import app
 from app.models.agent_task import AgentTask, AgentTaskStatus, AgentTaskType
@@ -29,6 +32,36 @@ def test_storage_path_uses_ascii_key_for_chinese_filename():
     assert "邀请函" not in path
     assert path.startswith("org/org-id/case/case-id/lawyer/other/")
     assert path.endswith("_upload.pdf")
+
+
+def test_pdf_extraction_uses_ocr_when_embedded_text_is_empty(monkeypatch, tmp_path):
+    class FakePage:
+        def get_text(self, mode="text"):
+            return ""
+
+    class FakeDoc:
+        def __len__(self):
+            return 1
+
+        def __iter__(self):
+            return iter([FakePage()])
+
+        def __getitem__(self, index):
+            return FakePage()
+
+        def close(self):
+            pass
+
+    fake_fitz = types.SimpleNamespace(open=lambda file_path: FakeDoc())
+    monkeypatch.setitem(sys.modules, "fitz", fake_fitz)
+    monkeypatch.setattr(fact_extractor, "_extract_pdf_ocr", lambda doc, max_chars=None: "[OCR page 1]\n邀请函 OCR 内容")
+
+    source = tmp_path / "scan.pdf"
+    source.write_bytes(b"%PDF")
+
+    text = fact_extractor.extract_text_from_file(str(source), "application/pdf")
+
+    assert "邀请函 OCR 内容" in text
 
 
 @pytest.mark.asyncio

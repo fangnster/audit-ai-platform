@@ -52,41 +52,89 @@ def _extract_pdf(file_path: str, max_chars: Optional[int] = None) -> str:
         import fitz  # PyMuPDF
         doc = fitz.open(file_path)
         try:
-            if not max_chars or len(doc) <= 8:
-                return "\n\n".join(page.get_text() for page in doc)
+            embedded_text = _extract_pdf_embedded_text(doc, max_chars=max_chars)
+            if len(embedded_text.strip()) >= settings.PARSE_MIN_READABLE_TEXT_CHARS:
+                return embedded_text
 
-            head_limit = max(1, int(max_chars * 0.7))
-            tail_limit = max(1, max_chars - head_limit)
-            head_pages: list[str] = []
-            tail_pages: list[str] = []
-            head_chars = 0
-            tail_chars = 0
-            head_end = 0
-
-            for page_index in range(len(doc)):
-                text = doc[page_index].get_text()
-                head_pages.append(text)
-                head_chars += len(text)
-                head_end = page_index + 1
-                if head_chars >= head_limit:
-                    break
-
-            for page_index in range(len(doc) - 1, head_end - 1, -1):
-                text = doc[page_index].get_text()
-                tail_pages.append(text)
-                tail_chars += len(text)
-                if tail_chars >= tail_limit:
-                    break
-
-            if tail_pages:
-                omitted = max(0, len(doc) - head_end - len(tail_pages))
-                return "\n\n".join(head_pages) + f"\n\n[... {omitted} middle PDF pages omitted ...]\n\n" + "\n\n".join(reversed(tail_pages))
-            return "\n\n".join(head_pages)
+            ocr_text = _extract_pdf_ocr(doc, max_chars=max_chars)
+            return ocr_text or embedded_text
         finally:
             doc.close()
     except ImportError:
         logger.warning("PyMuPDF not installed, falling back to plain read")
         return Path(file_path).read_text(encoding="utf-8", errors="ignore")
+
+
+def _extract_pdf_embedded_text(doc, max_chars: Optional[int] = None) -> str:
+    if not max_chars or len(doc) <= 8:
+        return "\n\n".join(page.get_text("text") for page in doc)
+
+    head_limit = max(1, int(max_chars * 0.7))
+    tail_limit = max(1, max_chars - head_limit)
+    head_pages: list[str] = []
+    tail_pages: list[str] = []
+    head_chars = 0
+    tail_chars = 0
+    head_end = 0
+
+    for page_index in range(len(doc)):
+        text = doc[page_index].get_text("text")
+        head_pages.append(text)
+        head_chars += len(text)
+        head_end = page_index + 1
+        if head_chars >= head_limit:
+            break
+
+    for page_index in range(len(doc) - 1, head_end - 1, -1):
+        text = doc[page_index].get_text("text")
+        tail_pages.append(text)
+        tail_chars += len(text)
+        if tail_chars >= tail_limit:
+            break
+
+    if tail_pages:
+        omitted = max(0, len(doc) - head_end - len(tail_pages))
+        return "\n\n".join(head_pages) + f"\n\n[... {omitted} middle PDF pages omitted ...]\n\n" + "\n\n".join(reversed(tail_pages))
+    return "\n\n".join(head_pages)
+
+
+def _extract_pdf_ocr(doc, max_chars: Optional[int] = None) -> str:
+    try:
+        import fitz  # PyMuPDF
+        import pytesseract
+        from PIL import Image
+    except ImportError:
+        logger.warning("PDF OCR dependencies not installed")
+        return ""
+
+    page_limit = min(len(doc), max(1, int(settings.PARSE_PDF_OCR_MAX_PAGES or 1)))
+    scale = max(1.0, float(settings.PARSE_PDF_OCR_DPI or 180) / 72.0)
+    matrix = fitz.Matrix(scale, scale)
+    chunks: list[str] = []
+    chars = 0
+
+    for page_index in range(page_limit):
+        try:
+            page = doc[page_index]
+            pix = page.get_pixmap(matrix=matrix, alpha=False)
+            image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+            text = pytesseract.image_to_string(image, lang="chi_sim+eng").strip()
+        except Exception as exc:
+            logger.warning("PDF OCR failed on page %s: %s", page_index + 1, str(exc)[:200])
+            continue
+
+        if not text:
+            continue
+        chunk = f"[OCR page {page_index + 1}]\n{text}"
+        chunks.append(chunk)
+        chars += len(chunk)
+        if max_chars and chars >= max_chars:
+            break
+
+    extracted = "\n\n".join(chunks)
+    if max_chars and len(extracted) > max_chars:
+        return extracted[:max_chars].rstrip()
+    return extracted
 
 
 def _extract_docx(file_path: str) -> str:
@@ -107,6 +155,9 @@ def _extract_image_ocr(file_path: str) -> str:
         return pytesseract.image_to_string(img, lang="chi_sim+eng")
     except ImportError:
         logger.warning("pytesseract/Pillow not installed")
+        return ""
+    except Exception as exc:
+        logger.warning("Image OCR failed: %s", str(exc)[:200])
         return ""
 
 
@@ -497,6 +548,7 @@ class FactExtractionAgent:
         stripped_text = raw_text.strip()
         text_chars = len(stripped_text)
         self.last_diagnostics["text_chars"] = text_chars
+        self.last_diagnostics["ocr_used"] = "[OCR page " in stripped_text[:500]
         if text_chars < settings.PARSE_MIN_READABLE_TEXT_CHARS:
             logger.warning(f"No text extracted from {file_path}")
             self.last_diagnostics["text_quality"] = "unreadable"
