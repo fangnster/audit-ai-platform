@@ -4,12 +4,13 @@ import tempfile
 from dataclasses import dataclass
 from typing import Optional
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from app.models.fact import Fact, FactStatus
 from app.deps import CurrentUser, DB, ensure_case_member
+from app.services.agent_tasks import release_stale_agent_tasks
 from app.services.cache import delete_pattern, get_json, set_json
-from app.utils.timezone import local_iso
+from app.utils.timezone import local_iso, local_now
 
 router = APIRouter()
 
@@ -56,6 +57,20 @@ def _structured_source_context(fact: Fact) -> tuple[str, str]:
         if value:
             parts.append(f"{key}: {value}")
     return "\n".join(parts), doc_name
+
+
+def _looks_like_resume_context(fact: Fact, document_name: str, source_text: str) -> bool:
+    sd = dict(fact.structured_data or {})
+    haystack = " ".join([
+        document_name or "",
+        str(sd.get("document_name") or ""),
+        str(sd.get("parse_prompt") or ""),
+        str(sd.get("source") or ""),
+        fact.category or "",
+        source_text[:1200],
+    ]).lower()
+    markers = ("resume", "cv", "curriculum vitae", "简历", "履历", "个人综述", "个人简介")
+    return any(marker in haystack for marker in markers)
 
 
 def _extract_text_from_document_bytes(content: bytes, filename: str, mime_type: str) -> str:
@@ -245,82 +260,140 @@ async def approve_fact(fact_id: uuid.UUID, current_user: CurrentUser, db: DB):
 
 class DisputeRequest(BaseModel):
     comment: str
+    knowledge_ids: list[uuid.UUID] = Field(default_factory=list)
 
 
 @router.post("/{fact_id}/dispute")
 async def dispute_fact(fact_id: uuid.UUID, body: DisputeRequest, current_user: CurrentUser, db: DB):
     """
-    Mark a fact as disputed and regenerate its content using the dispute comment as guidance.
-    The original content is preserved in structured_data for reference.
+    Mark a fact as disputed and queue a background reparse using the dispute comment as guidance.
     """
     fact = await _get_fact_for_user(fact_id, current_user, db)
+    if not body.comment.strip():
+        raise HTTPException(400, "Dispute comment cannot be empty")
 
+    dispute_comment = body.comment.strip()
+
+    knowledge_refs: list[dict[str, str]] = []
+    if body.knowledge_ids:
+        from app.models.knowledge import KnowledgeItem
+
+        result = await db.execute(
+            select(KnowledgeItem).where(
+                KnowledgeItem.id.in_(body.knowledge_ids),
+                KnowledgeItem.user_id == current_user.id,
+                KnowledgeItem.is_deleted == False,
+                KnowledgeItem.item_type.in_(["prompt_template", "agent_strategy"]),
+            )
+        )
+        selected_items = result.scalars().all()
+        if len({str(item.id) for item in selected_items}) != len({str(item_id) for item_id in body.knowledge_ids}):
+            raise HTTPException(400, "Invalid or unauthorized reparse knowledge id")
+        for item in selected_items:
+            knowledge_refs.append({
+                "id": str(item.id),
+                "title": item.title,
+                "type": item.item_type,
+            })
+
+    from app.config import settings
+    from app.models.agent_task import AgentTask, AgentTaskStatus, AgentTaskType
+    from app.models.case import Case
+    from app.models.organization import Organization
+
+    locked_fact_result = await db.execute(
+        select(Fact)
+        .where(Fact.id == fact.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    fact = locked_fact_result.scalar_one()
     original_content = fact.content
-    dispute_comment = body.comment
+    await release_stale_agent_tasks(
+        db,
+        case_id=fact.case_id,
+        task_types=[AgentTaskType.fact_reparse],
+        input_key="fact_id",
+        input_value=str(fact.id),
+        commit=False,
+    )
 
-    # Preserve dispute history in structured_data
+    running_result = await db.execute(
+        select(AgentTask)
+        .where(
+            AgentTask.case_id == fact.case_id,
+            AgentTask.task_type == AgentTaskType.fact_reparse,
+            AgentTask.status.in_([AgentTaskStatus.queued, AgentTaskStatus.processing]),
+            AgentTask.input_params.op("->>")("fact_id") == str(fact.id),
+        )
+        .order_by(AgentTask.created_at.desc())
+        .limit(1)
+    )
+    running_task = running_result.scalar_one_or_none()
+    if running_task:
+        return {
+            "id": str(fact.id),
+            "agent_task_id": str(running_task.id),
+            "status": str(running_task.status.value if hasattr(running_task.status, "value") else running_task.status),
+            "regenerated": False,
+            "original_content": original_content,
+            "message": "该事实已有重解析任务在后台处理中，请稍候查看 Agent 运行记录。",
+        }
+
     sd = dict(fact.structured_data or {})
     sd["dispute_comment"] = dispute_comment
     sd["original_content"] = original_content
+    sd["dispute_queued_at"] = local_iso(local_now())
+    if knowledge_refs:
+        sd["reparse_knowledge_refs"] = knowledge_refs
 
-    source_context = await _source_document_text(fact, db)
-    source_text = source_context.text
-    doc_name = source_context.document_name or sd.get("document_name", "未知文档")
-    sd["reparse_source"] = {
-        "document_name": doc_name,
-        **source_context.diagnostics,
-    }
-    try:
-        from app.llm.provider import LLMService
-        from app.models.case import Case
-        from app.models.organization import Organization
-        case = await db.get(Case, fact.case_id)
-        org = await db.get(Organization, case.org_id) if case else None
-        org_settings = org.settings if org and org.settings else {}
-        source_section = source_text or (
-            "The original document text is not available. Use only the original extracted fact, structured metadata, and lawyer correction below."
-        )
-        prompt = f"""A lawyer disputed an extracted immigration case fact. Re-parse the source context and revise the fact according to the lawyer's comment.
+    case = await db.get(Case, fact.case_id)
+    org = await db.get(Organization, case.org_id) if case else None
+    org_settings = org.settings if org and org.settings else {}
 
-Source document: {doc_name}
-Fact category: {fact.category}
-Source document text or available source context:
-{source_section}
-
-Original extracted fact:
-{original_content}
-
-Lawyer dispute/comment:
-{dispute_comment}
-
-Return ONLY the revised fact content in 1-3 precise sentences. Do not add facts that are not supported by the source context, original fact, or lawyer correction."""
-        regenerated = await LLMService().generate(
-            prompt,
-            system="You are a careful legal fact extraction assistant. Revise extracted facts conservatively.",
-            temperature=0.2,
-            max_tokens=700,
-            org_settings=org_settings,
-        )
-    except Exception:
-        regenerated = (
-            f"【基于异议重新生成】根据律师反馈「{dispute_comment}」，"
-            f"重新分析文档 '{doc_name}' 的内容：{original_content} "
-            f"经修正后的事实描述已根据异议观点进行调整和补充。"
-        )
-
-    fact.content = regenerated
     fact.structured_data = sd
-    fact.status = FactStatus.extracted  # Reset to pending for re-review
+    fact.status = FactStatus.disputed
+    agent_task = AgentTask(
+        case_id=fact.case_id,
+        task_type=AgentTaskType.fact_reparse,
+        input_params={
+            "case_id": str(fact.case_id),
+            "fact_id": str(fact.id),
+            "fact_category": fact.category,
+            "comment": dispute_comment,
+            "knowledge_ids": [str(item_id) for item_id in body.knowledge_ids],
+            "knowledge_refs": knowledge_refs,
+            "user_id": str(current_user.id),
+            "original_content": original_content[:2000],
+        },
+        status=AgentTaskStatus.queued,
+        priority=1,
+        llm_model=org_settings.get("llm_model") or settings.LLM_MODEL,
+    )
+    db.add(agent_task)
     await db.commit()
+    await db.refresh(agent_task)
     await _invalidate_fact_cache(fact.case_id)
+
+    try:
+        from app.workers.agent_tasks import reparse_fact as celery_task
+
+        celery_task.delay(str(fact.case_id), str(fact.id), str(agent_task.id))
+    except Exception as exc:
+        return {
+            "id": str(fact.id),
+            "agent_task_id": str(agent_task.id),
+            "status": "queued",
+            "message": f"事实重解析任务已加入后台队列。Celery 暂未确认接收：{str(exc)[:80]}",
+        }
 
     return {
         "id": str(fact.id),
-        "status": fact.status,
-        "regenerated": True,
+        "agent_task_id": str(agent_task.id),
+        "status": "queued",
+        "regenerated": False,
         "original_content": original_content,
-        "new_content": regenerated,
-        "reparse_source": sd["reparse_source"],
+        "message": "事实重解析已在后台启动，可在 Agent 运行记录查看进度和结果。",
     }
 
 

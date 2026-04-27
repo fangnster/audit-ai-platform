@@ -31,10 +31,11 @@ async def test_register_and_login(client):
         "name": "Test User",
         "password": "password123",
         "password_confirm": "password123",
-        "org_name": "Test Law Group",
+        "firm_name": "Test Law Group",
     })
     assert r.status_code == 201
     assert r.json()["email"] == email
+    assert r.json()["firm_name"] == "Test Law Group"
 
     # Login
     r = await client.post("/api/v1/auth/login", data={
@@ -45,17 +46,22 @@ async def test_register_and_login(client):
     assert "access_token" in r.json()
 
     token = r.json()["access_token"]
+    me = await client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert me.status_code == 200
+    assert me.json()["firm_name"] == "Test Law Group"
+
     org = await client.get("/api/v1/orgs/me", headers={"Authorization": f"Bearer {token}"})
     assert org.status_code == 200
-    assert org.json()["name"] == "Test Law Group"
+    assert org.json()["name"] == "个人工作区"
 
     profile = await client.patch(
         "/api/v1/auth/me",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Test Lawyer", "phone": "+1 555 123 4567"},
+        json={"name": "Test Lawyer", "firm_name": "Updated Display Law Group", "phone": "+1 555 123 4567"},
     )
     assert profile.status_code == 200
     assert profile.json()["name"] == "Test Lawyer"
+    assert profile.json()["firm_name"] == "Updated Display Law Group"
     assert profile.json()["profile"]["phone"] == "+1 555 123 4567"
 
     mismatch = await client.patch(

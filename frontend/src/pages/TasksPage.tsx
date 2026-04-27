@@ -123,9 +123,9 @@ export default function TasksPage() {
   return (
     <div>
       <div style={{ marginBottom: 24 }}>
-        <h1 style={{ fontSize: '1.4rem', fontWeight: 700 }}>✅ {t('taskCenter')}</h1>
+        <h1 style={{ fontSize: '1.4rem', fontWeight: 700 }}>✅ {t('caseTasks')}</h1>
         <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginTop: 4 }}>
-          {t('taskScope')}
+          {t('caseTaskScope')}
         </p>
         <div style={{ marginTop: 12, padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text-muted)', fontSize: '0.78rem', lineHeight: 1.6 }}>
           {t('taskRules')}

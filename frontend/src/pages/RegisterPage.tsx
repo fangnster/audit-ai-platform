@@ -100,7 +100,7 @@ export default function RegisterPage() {
               <input ref={orgRef} className="form-input" style={{ paddingLeft: 38 }} type="text" name="reg-org" autoComplete="new-password" value={orgName} onChange={(e) => setOrgName(e.target.value)} placeholder="XX 律师事务所" required />
             </div>
             <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: 4 }}>
-              注册时会用该名称创建您的组织
+              仅用于页面展示，不参与权限、共享或业务流程
             </span>
           </div>
           <div className="form-group">

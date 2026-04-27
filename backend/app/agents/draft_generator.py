@@ -11,6 +11,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional
 
+from app.config import settings
 from app.llm.provider import LLMService
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,13 @@ class EvidenceSource:
     quote: str | None = None
 
 
+def _truncate_text(value: str | None, limit: int) -> str:
+    text = (value or "").strip()
+    if limit <= 0 or len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
+
+
 @dataclass
 class CaseFact:
     id: str | None
@@ -93,17 +101,24 @@ class CaseFact:
             structured_data=structured,
         )
 
-    def to_prompt_dict(self) -> dict:
+    def to_prompt_dict(
+        self,
+        *,
+        content_limit: int | None = None,
+        quote_limit: int | None = None,
+    ) -> dict:
+        content_limit = content_limit or settings.DRAFT_MAX_FACT_CHARS
+        quote_limit = quote_limit or settings.DRAFT_MAX_FACT_QUOTE_CHARS
         return {
             "id": self.id,
             "category": self.category,
-            "content": self.content,
+            "content": _truncate_text(self.content, content_limit),
             "confidence": self.confidence,
             "source": {
                 "document_id": self.source.document_id,
                 "document_name": self.source.document_name,
                 "page": self.source.page,
-                "quote": self.source.quote,
+                "quote": _truncate_text(self.source.quote, quote_limit),
             },
         }
 
@@ -180,7 +195,7 @@ OUTPUT RULES:
 4. Treat any organization context as helper input, not mandatory section headings.
 5. Do not use a USCIS filing-letter structure, salutation, signature block, or fixed eligibility brief structure unless the lawyer's title or instructions explicitly request that kind of filing draft.
 6. If the lawyer specifies headings or sections, use those headings as the primary outline.
-7. Use the selected case facts and knowledge references to satisfy the requested requirements.
+7. Use the strongest selected case facts and knowledge references to satisfy the requested requirements; summarize supporting facts instead of exhaustively repeating every detail.
 8. Knowledge references are supporting material; do not copy their document type, boilerplate, or filing structure when it conflicts with the lawyer's requested format.
 9. Do not invent facts, citations, dates, awards, roles, publications, or legal conclusions not supported by the record.
 10. If the requested format includes immigration eligibility arguments, connect facts to the relevant legal criteria and explain why the standards are met.
@@ -214,22 +229,22 @@ STRATEGY_STYLES = {
     "strongest_first": {
         "style_name": "strongest-evidence-first",
         "style_description": "Lead with the strongest evidence and facts. Weaker evidence may support the draft, but should not carry the core message.",
-        "target_length": "2500-3500 words",
+        "target_length": "1600-2200 words",
     },
     "conservative": {
         "style_name": "conservative analysis",
         "style_description": "Use a careful, formal, non-exaggerated tone. Cite sources clearly and avoid overclaiming weak evidence.",
-        "target_length": "2200-3200 words",
+        "target_length": "1500-2100 words",
     },
     "narrative": {
         "style_name": "narrative persuasion",
         "style_description": "Open with the beneficiary's core contribution or strongest theme, then organize the facts under the lawyer's requested sections.",
-        "target_length": "2000-2800 words",
+        "target_length": "1400-2000 words",
     },
     "criterion": {
         "style_name": "section-by-section analysis",
         "style_description": "Use the lawyer's requested sections as the organizing points. Do not add any section framework that the title or instructions did not request.",
-        "target_length": "2500-3500 words",
+        "target_length": "1600-2200 words",
     },
 }
 
@@ -378,14 +393,15 @@ def build_knowledge_section(
     if not knowledge_refs:
         return ""
     knowledge_parts = []
-    for ki in knowledge_refs:
+    for ki in knowledge_refs[: settings.DRAFT_MAX_KNOWLEDGE_ITEMS]:
         ref_type = ki.get("type", "reference")
         guidance = "Use as prior draft/history context only when it fits the lawyer's current requested format; update facts and strategy."
         if ref_type != "draft_history":
             guidance = "Use as style, structure, template, sample, or agent-strategy guidance. If it conflicts with the lawyer's instructions, the lawyer's instructions control."
         if not legal_context_required:
             guidance += " Do not copy USCIS filing, eligibility-brief, salutation, or signature-block structure unless the current instructions request it."
-        knowledge_parts.append(f"--- {ki['title']} ({ref_type}) ---\n{guidance}\n{ki['content'][:2000]}")
+        content = _truncate_text(str(ki.get("content") or ""), settings.DRAFT_MAX_KNOWLEDGE_CHARS)
+        knowledge_parts.append(f"--- {ki['title']} ({ref_type}) ---\n{guidance}\n{content}")
     return "\nKNOWLEDGE BASE AND DRAFT HISTORY REFERENCES:\n" + "\n\n".join(knowledge_parts) + "\n"
 
 
@@ -394,6 +410,20 @@ def _criteria_map_for_case(case_type: str, criteria: Optional[list[str]] = None)
     if criteria:
         criteria_map = {k: v for k, v in criteria_map.items() if k in criteria}
     return criteria_map
+
+
+def _limit_draft_plan(plan: DraftPlan, max_facts: int) -> DraftPlan:
+    remaining = max(max_facts, 0)
+    limited_arguments: list[ArgumentUnit] = []
+    for argument in plan.arguments:
+        if remaining <= 0:
+            break
+        argument.selected_facts = argument.selected_facts[:remaining]
+        remaining -= len(argument.selected_facts)
+        if argument.selected_facts:
+            limited_arguments.append(argument)
+    plan.arguments = limited_arguments
+    return plan
 
 
 def _format_boundary(legal_context_required: bool) -> str:
@@ -441,7 +471,9 @@ class DraftGenerationAgent:
 
         if legal_context_required:
             draft_plan = orchestrator.build_plan()
+            draft_plan = _limit_draft_plan(draft_plan, settings.DRAFT_MAX_FACTS)
             selected_facts = orchestrator.selected_facts()
+            selected_facts = selected_facts[: settings.DRAFT_MAX_FACTS]
             criteria_str = "\n".join(f"- {k}: {v}" for k, v in _criteria_map_for_case(case_type, criteria).items())
             draft_plan_json = json.dumps(draft_plan.to_prompt_dict(), ensure_ascii=False, indent=2)
             organization_context_section = (
@@ -452,7 +484,7 @@ class DraftGenerationAgent:
                 f"{criteria_str}"
             )
         else:
-            selected_facts = orchestrator.facts_for_custom_draft()
+            selected_facts = orchestrator.facts_for_custom_draft(limit=settings.DRAFT_MAX_FACTS)
             organization_context_section = (
                 "CUSTOM DOCUMENT ORGANIZATION:\n"
                 "No legal criteria context was injected because the lawyer did not request eligibility analysis or filing-style argument. "
@@ -468,7 +500,7 @@ class DraftGenerationAgent:
         )
 
         user_prompt_section = (
-            user_prompt.strip()
+            _truncate_text(user_prompt, settings.DRAFT_MAX_USER_PROMPT_CHARS)
             or "No additional custom instructions were provided. Create a clear full draft using the selected strategy, facts, and knowledge references."
         )
 
@@ -478,9 +510,17 @@ class DraftGenerationAgent:
         )
         style = dict(STRATEGY_STYLES.get(strategy, STRATEGY_STYLES["strongest_first"]))
         if not legal_context_required:
-            style["target_length"] = "match the requested format; if no length is specified, 900-1600 words"
+            style["target_length"] = "match the requested format; if no length is specified, 700-1200 words"
 
-        logger.info(f"Generating main draft with strategy={strategy}...")
+        max_tokens = settings.DRAFT_GENERATION_MAX_TOKENS if legal_context_required else settings.DRAFT_CUSTOM_MAX_TOKENS
+        logger.info(
+            "Generating main draft strategy=%s legal_context=%s facts=%s knowledge_refs=%s max_tokens=%s",
+            strategy,
+            legal_context_required,
+            len(selected_facts),
+            len(knowledge_refs or []),
+            max_tokens,
+        )
         prompt = DRAFT_PROMPT_TEMPLATE.format(
             case_type=case_type,
             draft_title_instruction=draft_title_instruction,
@@ -495,7 +535,7 @@ class DraftGenerationAgent:
             prompt,
             system=DRAFT_SYSTEM_PROMPT,
             temperature=0.4,
-            max_tokens=4096,
+            max_tokens=max_tokens,
         )
 
     async def generate_three_versions(
@@ -536,10 +576,15 @@ class DraftGenerationAgent:
         """Rewrite a full draft based on lawyer instruction."""
         legal_context_required = requests_legal_criteria_context(user_prompt=instruction)
         style = STRATEGY_STYLES.get(strategy, STRATEGY_STYLES["strongest_first"])
+        compact_facts = [
+            CaseFact.from_dict(fact).to_prompt_dict()
+            for fact in relevant_facts[: settings.DRAFT_MAX_FACTS]
+            if fact.get("content")
+        ]
         prompt = SECTION_REWRITE_PROMPT.format(
-            original_content=original_content,
-            instruction=instruction,
-            facts_json=json.dumps(relevant_facts, ensure_ascii=False, indent=2),
+            original_content=_truncate_text(original_content, 12000),
+            instruction=_truncate_text(instruction, settings.DRAFT_MAX_USER_PROMPT_CHARS),
+            facts_json=json.dumps(compact_facts, ensure_ascii=False, indent=2),
             knowledge_section=build_knowledge_section(
                 knowledge_refs,
                 legal_context_required=legal_context_required,
@@ -551,7 +596,7 @@ class DraftGenerationAgent:
             prompt,
             system=DRAFT_SYSTEM_PROMPT,
             temperature=0.35,
-            max_tokens=2048,
+            max_tokens=settings.DRAFT_REWRITE_MAX_TOKENS,
         )
 
     async def generate_rfi_response(

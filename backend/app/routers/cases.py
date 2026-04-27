@@ -7,9 +7,9 @@ from pydantic import BaseModel, model_validator
 from sqlalchemy import select
 
 from app.models.case import Case, CaseMember, CaseStatus, CaseType, CaseMemberRole
-from app.models.organization import OrgMember
 from app.deps import CurrentUser, DB, ensure_case_member
 from app.services.cache import delete_pattern, get_json, set_json
+from app.services.todo_org import get_or_create_todo_org
 from app.utils.timezone import local_iso
 
 router = APIRouter()
@@ -86,6 +86,7 @@ async def _invalidate_case_cache(user_id: uuid.UUID | None = None) -> None:
     else:
         await delete_pattern("cases:*")
         await delete_pattern(f"{CASE_CACHE_PREFIX}:*")
+    await delete_pattern("admin:v1:*")
 
 
 async def _get_case_for_user(case_id: uuid.UUID, current_user, db: DB) -> Case:
@@ -100,14 +101,11 @@ async def _get_case_for_user(case_id: uuid.UUID, current_user, db: DB) -> Case:
 
 @router.post("", response_model=CaseResponse, status_code=201)
 async def create_case(body: CreateCaseRequest, current_user: CurrentUser, db: DB):
-    # Get user's org
-    result = await db.execute(select(OrgMember).where(OrgMember.user_id == current_user.id))
-    member = result.scalars().first()
-    if not member:
-        raise HTTPException(status_code=403, detail="您尚未加入任何组织，请联系管理员或重新注册")
+    # TODO(org): org is only a legacy FK shell, not a business boundary.
+    org = await get_or_create_todo_org(db, current_user)
 
     case = Case(
-        org_id=member.org_id,
+        org_id=org.id,
         title=body.title,
         case_type=body.case_type,
         lead_lawyer_id=current_user.id,
@@ -180,6 +178,10 @@ async def list_trash(current_user: CurrentUser, db: DB):
 
 @router.get("/{case_id}", response_model=CaseResponse)
 async def get_case(case_id: uuid.UUID, current_user: CurrentUser, db: DB):
+    cache_key = f"{CASE_CACHE_PREFIX}:{current_user.id}:detail:{case_id}"
+    cached = await get_json(cache_key)
+    if cached is not None:
+        return cached
     result = await db.execute(
         select(Case)
         .join(CaseMember, CaseMember.case_id == Case.id)
@@ -188,7 +190,9 @@ async def get_case(case_id: uuid.UUID, current_user: CurrentUser, db: DB):
     case = result.scalar_one_or_none()
     if not case:
         raise HTTPException(status_code=404, detail="Case not found")
-    return CaseResponse.from_case(case)
+    payload = CaseResponse.from_case(case).model_dump(mode="json")
+    await set_json(cache_key, payload)
+    return payload
 
 
 # ── Update (edit title / type / status) ────

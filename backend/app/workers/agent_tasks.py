@@ -9,6 +9,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import tempfile
 import time
 import uuid
 
@@ -22,6 +24,13 @@ logger = logging.getLogger(__name__)
 redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
 
 SECTION_LOCK_TTL = 120  # seconds
+
+
+def _truncate_text(value: str | None, limit: int) -> str:
+    text = (value or "").strip()
+    if limit <= 0 or len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
 
 
 def _run_async(coro):
@@ -40,12 +49,29 @@ def _get_db_session():
     return engine, Session(engine)
 
 
-def _mark_processing(agent_task) -> None:
+def _status_value(status) -> str:
+    return str(status.value if hasattr(status, "value") else status)
+
+
+def _mark_processing(agent_task) -> bool:
     from app.models.agent_task import AgentTaskStatus
 
-    if agent_task:
-        agent_task.status = AgentTaskStatus.processing
-        agent_task.error_message = None
+    if not agent_task:
+        return False
+    if _status_value(agent_task.status) not in {AgentTaskStatus.queued.value, AgentTaskStatus.processing.value}:
+        return False
+    agent_task.status = AgentTaskStatus.processing
+    agent_task.error_message = None
+    return True
+
+
+def _worker_may_continue(session, agent_task) -> bool:
+    from app.models.agent_task import AgentTaskStatus
+
+    if not agent_task:
+        return False
+    session.refresh(agent_task)
+    return _status_value(agent_task.status) in {AgentTaskStatus.queued.value, AgentTaskStatus.processing.value}
 
 
 def _mark_completed(agent_task, output_result: dict, started_at: float) -> None:
@@ -56,6 +82,16 @@ def _mark_completed(agent_task, output_result: dict, started_at: float) -> None:
         agent_task.output_result = output_result
         agent_task.latency_ms = int((time.perf_counter() - started_at) * 1000)
         agent_task.error_message = None
+
+
+def _mark_failed(agent_task, output_result: dict, started_at: float, error_message: str) -> None:
+    from app.models.agent_task import AgentTaskStatus
+
+    if agent_task:
+        agent_task.status = AgentTaskStatus.failed
+        agent_task.output_result = output_result
+        agent_task.latency_ms = int((time.perf_counter() - started_at) * 1000)
+        agent_task.error_message = error_message[:1000]
 
 
 def _record_agent_task_error(agent_task_id: str, exc: Exception, started_at: float, *, final: bool) -> None:
@@ -82,17 +118,150 @@ def _invalidate_case_runtime_cache(case_id: str) -> None:
     delete_pattern_sync(f"facts:{case_id}:*")
     delete_pattern_sync(f"tasks:{case_id}:*")
     delete_pattern_sync(f"documents:{case_id}:*")
+    delete_pattern_sync("admin:v1:*")
 
 
 def _fact_to_prompt_dict(fact) -> dict:
+    structured = fact.structured_data or {}
+    compact_structured = {
+        key: _truncate_text(str(structured.get(key) or ""), settings.DRAFT_MAX_FACT_QUOTE_CHARS)
+        for key in ("document_name", "source", "quote", "page")
+        if structured.get(key) is not None
+    }
     return {
         "id": str(fact.id),
         "source_document_id": str(fact.source_document_id) if fact.source_document_id else None,
         "category": fact.category,
-        "content": fact.content,
-        "structured_data": fact.structured_data or {},
+        "content": _truncate_text(fact.content, settings.DRAFT_MAX_FACT_CHARS),
+        "structured_data": compact_structured,
         "confidence_score": fact.confidence_score,
     }
+
+
+def _truncate_source_text(text: str, max_chars: int = 12000) -> str:
+    text = (text or "").strip()
+    if len(text) <= max_chars:
+        return text
+    head = int(max_chars * 0.7)
+    tail = max_chars - head
+    return text[:head] + f"\n\n[... {len(text) - max_chars} chars omitted ...]\n\n" + text[-tail:]
+
+
+def _structured_source_context(fact) -> tuple[str, str]:
+    structured = dict(fact.structured_data or {})
+    doc_name = str(structured.get("document_name") or structured.get("source") or "")
+    parts: list[str] = []
+    for key in (
+        "document_name",
+        "source",
+        "quote",
+        "title",
+        "date",
+        "organization",
+        "impact",
+        "numbers",
+        "parse_prompt",
+        "source_type",
+    ):
+        value = structured.get(key)
+        if value:
+            parts.append(f"{key}: {value}")
+    return "\n".join(parts), doc_name
+
+
+def _extract_text_from_document_bytes(content: bytes, filename: str, mime_type: str) -> str:
+    from app.agents.fact_extractor import extract_text_from_file
+
+    suffix = os.path.splitext(filename or "")[1]
+    temp_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            temp_path = tmp.name
+            tmp.write(content)
+        extracted = extract_text_from_file(temp_path, mime_type)
+        if extracted.strip():
+            return extracted
+        try:
+            return content.decode("utf-8", errors="ignore")
+        except Exception:
+            return ""
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+def _source_document_text(fact, session) -> dict:
+    metadata_context, metadata_doc_name = _structured_source_context(fact)
+    if not fact.source_document_id:
+        return {
+            "text": _truncate_source_text(metadata_context),
+            "document_name": metadata_doc_name,
+            "diagnostics": {
+                "source": "fact_metadata" if metadata_context else "unavailable",
+                "source_document_id": None,
+                "source_text_available": bool(metadata_context),
+                "error": "Fact has no linked source document.",
+            },
+        }
+
+    from app.models.document import Document
+    from app.routers.documents import read_document_bytes
+
+    doc = session.get(Document, fact.source_document_id)
+    if not doc:
+        return {
+            "text": _truncate_source_text(metadata_context),
+            "document_name": metadata_doc_name,
+            "diagnostics": {
+                "source": "fact_metadata" if metadata_context else "unavailable",
+                "source_document_id": str(fact.source_document_id),
+                "source_text_available": bool(metadata_context),
+                "error": "Linked source document record was not found.",
+            },
+        }
+
+    doc_name = doc.original_filename or metadata_doc_name
+    try:
+        content = read_document_bytes(doc)
+        extracted = _extract_text_from_document_bytes(content, doc.original_filename or "", doc.mime_type or "")
+        if extracted.strip():
+            return {
+                "text": _truncate_source_text(extracted),
+                "document_name": doc_name,
+                "diagnostics": {
+                    "source": "uploaded_file",
+                    "source_document_id": str(fact.source_document_id),
+                    "source_text_available": True,
+                },
+            }
+        error = "Original file was found, but no readable text could be extracted."
+    except Exception as exc:
+        error = str(exc)
+
+    return {
+        "text": _truncate_source_text(metadata_context),
+        "document_name": doc_name,
+        "diagnostics": {
+            "source": "fact_metadata" if metadata_context else "unavailable",
+            "source_document_id": str(fact.source_document_id),
+            "source_text_available": bool(metadata_context),
+            "error": error,
+        },
+    }
+
+
+def _looks_like_resume_context(fact, document_name: str, source_text: str) -> bool:
+    structured = dict(fact.structured_data or {})
+    haystack = " ".join([
+        document_name or "",
+        str(structured.get("document_name") or ""),
+        str(structured.get("parse_prompt") or ""),
+        str(structured.get("source") or ""),
+        fact.category or "",
+        source_text[:1200],
+    ]).lower()
+    markers = ("resume", "cv", "curriculum vitae", "简历", "履历", "个人综述", "个人简介")
+    return any(marker in haystack for marker in markers)
 
 
 def _draft_history_refs(session, case_uuid: uuid.UUID, exclude_section_id: uuid.UUID | None = None) -> list[dict]:
@@ -139,6 +308,8 @@ def _draft_history_refs(session, case_uuid: uuid.UUID, exclude_section_id: uuid.
 @celery_app.task(
     bind=True,
     max_retries=2,
+    soft_time_limit=settings.DRAFT_TASK_SOFT_TIME_LIMIT_SECONDS,
+    time_limit=settings.DRAFT_TASK_TIME_LIMIT_SECONDS,
     name="app.workers.agent_tasks.generate_drafts",
 )
 def generate_drafts(self, case_id: str, agent_task_id: str):
@@ -148,7 +319,7 @@ def generate_drafts(self, case_id: str, agent_task_id: str):
     """
     from app.models.fact import Fact, FactStatus
     from app.models.draft import DraftRevision, DraftSection, SectionStatus
-    from app.models.agent_task import AgentTask, AgentTaskStatus
+    from app.models.agent_task import AgentTask
     from app.models.case import Case
     from app.models.organization import Organization
     from app.models.knowledge import KnowledgeItem
@@ -163,13 +334,15 @@ def generate_drafts(self, case_id: str, agent_task_id: str):
         with session:
             # Update task status
             agent_task = session.get(AgentTask, uuid.UUID(agent_task_id))
-            _mark_processing(agent_task)
+            if not _mark_processing(agent_task):
+                logger.info("agent_task_skip_released type=generate_drafts task_id=%s case_id=%s", agent_task_id, case_id)
+                return {"case_id": case_id, "skipped": "agent task already released"}
             session.commit()
 
             case = session.get(Case, uuid.UUID(case_id))
             if not case:
                 if agent_task:
-                    _mark_completed(agent_task, {"error": "case not found"}, started_at)
+                    _mark_failed(agent_task, {"error": "case not found"}, started_at, "case not found")
                     session.commit()
                 return {"error": "case not found"}
 
@@ -180,6 +353,7 @@ def generate_drafts(self, case_id: str, agent_task_id: str):
             strategy = input_params.get("strategy", "strongest_first")
             knowledge_ids = input_params.get("knowledge_ids", [])
             fact_ids = input_params.get("fact_ids", [])
+            knowledge_ids = knowledge_ids[: settings.DRAFT_MAX_KNOWLEDGE_ITEMS]
 
             # Fetch facts: specific IDs if provided, otherwise approved facts with a non-deleted fallback.
             if fact_ids:
@@ -188,7 +362,7 @@ def generate_drafts(self, case_id: str, agent_task_id: str):
                         Fact.case_id == uuid.UUID(case_id),
                         Fact.id.in_([uuid.UUID(fid) for fid in fact_ids]),
                         Fact.is_deleted == False,
-                    )
+                    ).limit(settings.DRAFT_MAX_FACTS * 2)
                 )
             else:
                 facts_result = session.execute(
@@ -197,6 +371,8 @@ def generate_drafts(self, case_id: str, agent_task_id: str):
                         Fact.status == FactStatus.lawyer_approved,
                         Fact.is_deleted == False,
                     )
+                    .order_by(Fact.confidence_score.desc(), Fact.updated_at.desc())
+                    .limit(settings.DRAFT_MAX_FACTS * 2)
                 )
                 facts = facts_result.scalars().all()
                 if not facts:
@@ -205,6 +381,8 @@ def generate_drafts(self, case_id: str, agent_task_id: str):
                             Fact.case_id == uuid.UUID(case_id),
                             Fact.is_deleted == False,
                         )
+                        .order_by(Fact.confidence_score.desc(), Fact.updated_at.desc())
+                        .limit(settings.DRAFT_MAX_FACTS * 2)
                     )
                     facts = facts_result.scalars().all()
                 facts = [_fact_to_prompt_dict(f) for f in facts]
@@ -213,7 +391,7 @@ def generate_drafts(self, case_id: str, agent_task_id: str):
 
             if not facts:
                 if agent_task:
-                    _mark_completed(agent_task, {"error": "no facts", "case_id": case_id}, started_at)
+                    _mark_failed(agent_task, {"error": "no facts", "case_id": case_id}, started_at, "no facts")
                     session.commit()
                 return {"error": "no facts", "case_id": case_id}
 
@@ -227,7 +405,7 @@ def generate_drafts(self, case_id: str, agent_task_id: str):
                     knowledge_content.append({
                         "title": ki.title,
                         "type": ki.item_type,
-                        "content": ki.content,
+                        "content": _truncate_text(ki.content, settings.DRAFT_MAX_KNOWLEDGE_CHARS),
                     })
             # Historical full drafts are intentionally not injected automatically.
             # Older same-case drafts can carry a filing-letter structure that overrides
@@ -253,6 +431,9 @@ def generate_drafts(self, case_id: str, agent_task_id: str):
                 strategy=strategy,
                 knowledge_refs=knowledge_content,
             ))
+            if not _worker_may_continue(session, agent_task):
+                logger.info("agent_task_skip_released_after_llm type=generate_drafts task_id=%s case_id=%s", agent_task_id, case_id)
+                return {"case_id": case_id, "skipped": "agent task already released"}
             drafts = {"main": content}
 
             # Persist each version as one full draft instead of splitting it into paragraph/section cards.
@@ -287,6 +468,7 @@ def generate_drafts(self, case_id: str, agent_task_id: str):
                     "versions": list(drafts.keys()),
                     "fact_count": len(facts),
                     "history_ref_count": len(history_refs),
+                    "knowledge_ref_count": len(knowledge_content),
                 },
                 started_at,
             )
@@ -300,7 +482,8 @@ def generate_drafts(self, case_id: str, agent_task_id: str):
         final = self.request.retries >= self.max_retries
         _record_agent_task_error(agent_task_id, exc, started_at, final=final)
         logger.exception("agent_task_error type=generate_drafts task_id=%s case_id=%s final=%s", agent_task_id, case_id, final)
-        raise self.retry(exc=exc)
+        countdown = min(90, 10 * (2 ** self.request.retries))
+        raise self.retry(exc=exc, countdown=countdown)
     finally:
         engine.dispose()
 
@@ -316,7 +499,7 @@ def rewrite_section(self, section_id: str, instruction: str, case_id: str, agent
     Implements segment-level concurrency control.
     """
     from app.models.draft import DraftRevision, DraftSection, SectionStatus
-    from app.models.agent_task import AgentTask, AgentTaskStatus
+    from app.models.agent_task import AgentTask
     from app.models.fact import Fact, FactStatus
     from app.models.case import Case
     from app.models.organization import Organization
@@ -339,13 +522,15 @@ def rewrite_section(self, section_id: str, instruction: str, case_id: str, agent
     try:
         with session:
             agent_task = session.get(AgentTask, uuid.UUID(agent_task_id))
-            _mark_processing(agent_task)
+            if not _mark_processing(agent_task):
+                logger.info("agent_task_skip_released type=rewrite_section task_id=%s case_id=%s section_id=%s", agent_task_id, case_id, section_id)
+                return {"section_id": section_id, "skipped": "agent task already released"}
             session.commit()
 
             section = session.get(DraftSection, uuid.UUID(section_id))
             if not section:
                 if agent_task:
-                    _mark_completed(agent_task, {"error": "section not found", "section_id": section_id}, started_at)
+                    _mark_failed(agent_task, {"error": "section not found", "section_id": section_id}, started_at, "section not found")
                     session.commit()
                 return {"error": "section not found"}
 
@@ -416,6 +601,9 @@ def rewrite_section(self, section_id: str, instruction: str, case_id: str, agent
                 strategy=strategy,
                 knowledge_refs=knowledge_content,
             ))
+            if not _worker_may_continue(session, agent_task):
+                logger.info("agent_task_skip_released_after_llm type=rewrite_section task_id=%s case_id=%s section_id=%s", agent_task_id, case_id, section_id)
+                return {"section_id": section_id, "skipped": "agent task already released"}
 
             old_content = section.content
             revision_result = session.execute(
@@ -515,6 +703,191 @@ def fix_fact(self, case_id: str, fact_id: str, old_value: str, new_value: str):
 
     except Exception as exc:
         raise self.retry(exc=exc)
+    finally:
+        engine.dispose()
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    name="app.workers.agent_tasks.reparse_fact",
+)
+def reparse_fact(self, case_id: str, fact_id: str, agent_task_id: str):
+    """Reparse one disputed fact in the background and record detailed diagnostics."""
+    from app.models.agent_task import AgentTask
+    from app.models.fact import Fact, FactStatus
+    from app.models.case import Case
+    from app.models.organization import Organization
+    from app.models.knowledge import KnowledgeItem
+    from app.llm.provider import LLMService
+    from app.utils.timezone import local_iso, local_now
+    from sqlalchemy import select
+
+    started_at = time.perf_counter()
+    logger.info("agent_task_start type=reparse_fact task_id=%s case_id=%s fact_id=%s", agent_task_id, case_id, fact_id)
+    engine, session = _get_db_session()
+    try:
+        with session:
+            agent_task = session.get(AgentTask, uuid.UUID(agent_task_id))
+            if not _mark_processing(agent_task):
+                logger.info("agent_task_skip_released type=reparse_fact task_id=%s case_id=%s fact_id=%s", agent_task_id, case_id, fact_id)
+                return {"fact_id": fact_id, "skipped": "agent task already released"}
+            session.commit()
+
+            fact = session.get(Fact, uuid.UUID(fact_id))
+            if not fact:
+                if agent_task:
+                    _mark_failed(agent_task, {"error": "fact not found", "fact_id": fact_id}, started_at, "fact not found")
+                    session.commit()
+                return {"error": "fact not found", "fact_id": fact_id}
+
+            input_params = dict(agent_task.input_params or {}) if agent_task else {}
+            dispute_comment = str(input_params.get("comment") or "").strip()
+            original_content = str(input_params.get("original_content") or fact.content or "")
+            knowledge_ids = [str(item_id) for item_id in (input_params.get("knowledge_ids") or [])]
+            user_id = input_params.get("user_id")
+
+            knowledge_refs: list[dict] = []
+            if knowledge_ids:
+                filters = [
+                    KnowledgeItem.id.in_([uuid.UUID(item_id) for item_id in knowledge_ids]),
+                    KnowledgeItem.is_deleted == False,
+                    KnowledgeItem.item_type.in_(["prompt_template", "agent_strategy"]),
+                ]
+                if user_id:
+                    filters.append(KnowledgeItem.user_id == uuid.UUID(str(user_id)))
+                result = session.execute(select(KnowledgeItem).where(*filters))
+                for item in result.scalars().all():
+                    knowledge_refs.append({
+                        "id": str(item.id),
+                        "title": item.title,
+                        "type": item.item_type,
+                        "content": _truncate_text(item.content, 2000),
+                    })
+
+            source_context = _source_document_text(fact, session)
+            source_text = source_context["text"]
+            doc_name = source_context["document_name"] or (fact.structured_data or {}).get("document_name", "未知文档")
+            source_diagnostics = {
+                "document_name": doc_name,
+                **source_context["diagnostics"],
+                "source_text_chars": len(source_text or ""),
+            }
+
+            source_section = source_text or (
+                "The original document text is not available. Use only the original extracted fact, structured metadata, and lawyer correction below."
+            )
+            resume_reparse_rules = ""
+            if _looks_like_resume_context(fact, doc_name, source_text):
+                resume_reparse_rules = """
+
+Resume/CV reparse rules:
+- Treat resume/CV entries as objective facts, not as weak background details.
+- If the lawyer points to an education, employment, publication, patent, award, membership, service, project, or metric entry, preserve the concrete date, title, organization, venue, number, and source wording when available.
+- Revise this single fact precisely; do not replace it with a broad career summary.
+- Do not add an immigration legal conclusion unless the lawyer specifically asks for one."""
+
+            knowledge_section = ""
+            if knowledge_refs:
+                parts = [
+                    f"--- {item['title']} ({item['type']}) ---\n{item['content']}"
+                    for item in knowledge_refs
+                ]
+                knowledge_section = "\n\nLawyer-selected parsing prompt and agent strategy references:\n" + "\n\n".join(parts)
+
+            prompt = f"""A lawyer disputed an extracted immigration case fact. Re-parse the source context and revise the fact according to the lawyer's comment.
+
+Source document: {doc_name}
+Fact category: {fact.category}
+Source document text or available source context:
+{source_section}
+{knowledge_section}
+{resume_reparse_rules}
+
+Original extracted fact:
+{original_content}
+
+Lawyer dispute/comment:
+{dispute_comment}
+
+Return ONLY the revised fact content in 1-3 precise sentences. Do not add facts that are not supported by the source context, original fact, or lawyer correction."""
+
+            case = session.get(Case, uuid.UUID(case_id))
+            org = session.get(Organization, case.org_id) if case else None
+            org_settings = org.settings if org and org.settings else {}
+            fallback_used = False
+            llm_error = None
+            try:
+                regenerated = _run_async(LLMService.from_org_settings(org_settings).generate(
+                    prompt,
+                    system="You are a careful legal fact extraction assistant. Revise extracted facts conservatively.",
+                    temperature=0.2,
+                    max_tokens=700,
+                ))
+            except Exception as exc:
+                fallback_used = True
+                llm_error = str(exc)
+                regenerated = (
+                    f"【基于异议重新生成】根据律师反馈「{dispute_comment}」，"
+                    f"重新分析文档 '{doc_name}' 的内容：{fact.content} "
+                    f"经修正后的事实描述已根据异议观点进行调整和补充。"
+                )
+            if not _worker_may_continue(session, agent_task):
+                logger.info("agent_task_skip_released_after_llm type=reparse_fact task_id=%s case_id=%s fact_id=%s", agent_task_id, case_id, fact_id)
+                return {"fact_id": fact_id, "skipped": "agent task already released"}
+
+            structured = dict(fact.structured_data or {})
+            structured["dispute_comment"] = dispute_comment
+            structured["original_content"] = original_content
+            structured["reparse_source"] = source_diagnostics
+            structured["reparse_agent_task_id"] = agent_task_id
+            structured["reparse_completed_at"] = local_iso(local_now())
+            if knowledge_refs:
+                structured["reparse_knowledge_refs"] = [
+                    {"id": item["id"], "title": item["title"], "type": item["type"]}
+                    for item in knowledge_refs
+                ]
+            if llm_error:
+                structured["reparse_llm_error"] = llm_error[:500]
+
+            fact.content = regenerated
+            fact.structured_data = structured
+            fact.status = FactStatus.extracted
+
+            output_result = {
+                "fact_id": fact_id,
+                "fact_category": fact.category,
+                "source_document": doc_name,
+                "reparse_source": source_diagnostics,
+                "knowledge_ref_count": len(knowledge_refs),
+                "knowledge_refs": [
+                    {"id": item["id"], "title": item["title"], "type": item["type"]}
+                    for item in knowledge_refs
+                ],
+                "comment_chars": len(dispute_comment),
+                "source_text_chars": len(source_text or ""),
+                "prompt_chars": len(prompt),
+                "fallback_used": fallback_used,
+                "llm_error": llm_error[:500] if llm_error else None,
+                "original_content": _truncate_text(original_content, 800),
+                "new_content": _truncate_text(regenerated, 1200),
+            }
+            _mark_completed(agent_task, output_result, started_at)
+            session.commit()
+            _invalidate_case_runtime_cache(case_id)
+            redis_client.publish(
+                f"case:{case_id}:updates",
+                json.dumps({"type": "fact_reparsed", "fact_id": fact_id, "task_id": agent_task_id}),
+            )
+            logger.info("agent_task_done type=reparse_fact task_id=%s case_id=%s fact_id=%s", agent_task_id, case_id, fact_id)
+            return {"fact_id": fact_id, "status": "reparsed", "fallback_used": fallback_used}
+
+    except Exception as exc:
+        final = self.request.retries >= self.max_retries
+        _record_agent_task_error(agent_task_id, exc, started_at, final=final)
+        logger.exception("agent_task_error type=reparse_fact task_id=%s case_id=%s fact_id=%s final=%s", agent_task_id, case_id, fact_id, final)
+        countdown = min(60, 10 * (2 ** self.request.retries))
+        raise self.retry(exc=exc, countdown=countdown)
     finally:
         engine.dispose()
 
@@ -641,7 +1014,9 @@ def generate_rfi(self, case_id: str, rfi_text: str, agent_task_id: str):
     try:
         with session:
             agent_task = session.get(AgentTask, uuid.UUID(agent_task_id))
-            _mark_processing(agent_task)
+            if not _mark_processing(agent_task):
+                logger.info("agent_task_skip_released type=generate_rfi task_id=%s case_id=%s", agent_task_id, case_id)
+                return {"case_id": case_id, "skipped": "agent task already released"}
             session.commit()
 
             facts_result = session.execute(

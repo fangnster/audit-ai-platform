@@ -12,8 +12,9 @@ from app.config import settings
 from app.database import engine
 from app.logging_config import configure_logging
 from app.models import *  # register all models with SQLAlchemy
+from app.services.cache import close_cache_clients
 
-from app.routers import auth, orgs, cases, documents, facts, drafts, tasks, translation, sessions, ws, knowledge
+from app.routers import auth, orgs, cases, documents, facts, drafts, tasks, translation, sessions, ws, knowledge, admin
 
 configure_logging()
 logger = logging.getLogger("app.request")
@@ -24,6 +25,7 @@ async def lifespan(app: FastAPI):
     # Startup
     yield
     # Shutdown
+    await close_cache_clients()
     await engine.dispose()
 
 
@@ -88,6 +90,7 @@ app.include_router(tasks.router,       prefix=f"{API}/tasks",       tags=["Tasks
 app.include_router(translation.router, prefix=f"{API}/translate",   tags=["Translation"])
 app.include_router(sessions.router,    prefix=f"{API}/sessions",    tags=["Sessions"])
 app.include_router(knowledge.router,   prefix=f"{API}/knowledge",   tags=["Knowledge"])
+app.include_router(admin.router,       prefix=f"{API}/admin",       tags=["Admin"])
 app.include_router(ws.router,          tags=["WebSockets"])
 
 

@@ -16,10 +16,265 @@ from sqlalchemy import select
 from app.deps import CurrentUser, DB, ensure_case_member
 from app.models.draft import DraftRevision, DraftSection, SectionStatus
 from app.models.agent_task import AgentTask, AgentTaskType, AgentTaskStatus
+from app.models.document import Document
+from app.models.fact import Fact
+from app.models.knowledge import KnowledgeItem
+from app.services.agent_tasks import release_stale_agent_tasks
 from app.services.cache import delete_pattern, get_json, set_json
 from app.utils.timezone import local_display, local_iso
 
 router = APIRouter()
+
+STRATEGY_LABELS = {
+    "strongest_first": "最强证据优先",
+    "conservative": "保守严谨",
+    "narrative": "叙事结构",
+    "criterion": "法律要件结构",
+    "rfe_response": "RFE/NOID 逐条回应",
+    "resume_profile": "履历时间线",
+    "legal_criteria": "法律要件组织",
+    "original_contribution": "原创贡献链条",
+    "external_recognition": "外部认可优先",
+    "critical_role": "关键岗位影响",
+    "rewrite_tighten": "压缩稳健重写",
+    "rewrite_keep_facts": "保留事实重组",
+}
+
+
+def _compact_agent_payload(value, *, string_limit: int = 2400, list_limit: int = 30, depth: int = 0):
+    """Keep Agent records detailed enough for auditing without returning huge prompts."""
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return value if len(value) <= string_limit else value[:string_limit].rstrip() + f"...（已截断 {len(value) - string_limit} 字符）"
+    if isinstance(value, list):
+        items = [_compact_agent_payload(item, string_limit=string_limit, list_limit=list_limit, depth=depth + 1) for item in value[:list_limit]]
+        if len(value) > list_limit:
+            items.append({"truncated_items": len(value) - list_limit})
+        return items
+    if isinstance(value, dict):
+        if depth >= 4:
+            text = str(value)
+            return text if len(text) <= string_limit else text[:string_limit].rstrip() + "..."
+        return {
+            str(key): _compact_agent_payload(item, string_limit=string_limit, list_limit=list_limit, depth=depth + 1)
+            for key, item in value.items()
+        }
+    return str(value)
+
+
+def _to_uuid(value) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(str(value))
+    except Exception:
+        return None
+
+
+def _collect_uuid_values(payload: dict, keys: tuple[str, ...]) -> set[uuid.UUID]:
+    ids: set[uuid.UUID] = set()
+    for key in keys:
+        raw = payload.get(key)
+        values = raw if isinstance(raw, list) else [raw]
+        for value in values:
+            parsed = _to_uuid(value)
+            if parsed:
+                ids.add(parsed)
+    return ids
+
+
+def _fact_label(fact: Fact) -> str:
+    content = (fact.content or "").strip().replace("\n", " ")
+    if len(content) > 120:
+        content = content[:120].rstrip() + "..."
+    return f"{fact.category} · {content}" if content else fact.category
+
+
+async def _agent_task_human_context(db: DB, case_id: uuid.UUID, current_user, tasks: list[AgentTask]) -> dict[str, dict]:
+    document_ids: set[uuid.UUID] = set()
+    fact_ids: set[uuid.UUID] = set()
+    section_ids: set[uuid.UUID] = set()
+    knowledge_ids: set[uuid.UUID] = set()
+
+    for task in tasks:
+        input_params = task.input_params or {}
+        output_result = task.output_result or {}
+        document_ids |= _collect_uuid_values(input_params, ("document_id", "source_document_id"))
+        document_ids |= _collect_uuid_values(output_result, ("document_id", "source_document_id"))
+        reparse_source = output_result.get("reparse_source") if isinstance(output_result.get("reparse_source"), dict) else {}
+        document_ids |= _collect_uuid_values(reparse_source, ("source_document_id",))
+
+        fact_ids |= _collect_uuid_values(input_params, ("fact_id", "fact_ids"))
+        fact_ids |= _collect_uuid_values(output_result, ("fact_id", "fact_ids"))
+
+        section_ids |= _collect_uuid_values(input_params, ("section_id",))
+        section_ids |= _collect_uuid_values(output_result, ("section_id",))
+
+        knowledge_ids |= _collect_uuid_values(input_params, ("knowledge_ids",))
+        knowledge_ids |= _collect_uuid_values(output_result, ("knowledge_ids",))
+
+    documents: dict[uuid.UUID, Document] = {}
+    if document_ids:
+        result = await db.execute(
+            select(Document).where(Document.case_id == case_id, Document.id.in_(document_ids))
+        )
+        documents = {item.id: item for item in result.scalars().all()}
+
+    facts: dict[uuid.UUID, Fact] = {}
+    if fact_ids:
+        result = await db.execute(
+            select(Fact).where(Fact.case_id == case_id, Fact.id.in_(fact_ids))
+        )
+        facts = {item.id: item for item in result.scalars().all()}
+
+    sections: dict[uuid.UUID, DraftSection] = {}
+    if section_ids:
+        result = await db.execute(
+            select(DraftSection).where(DraftSection.case_id == case_id, DraftSection.id.in_(section_ids))
+        )
+        sections = {item.id: item for item in result.scalars().all()}
+
+    knowledge: dict[uuid.UUID, KnowledgeItem] = {}
+    if knowledge_ids:
+        result = await db.execute(
+            select(KnowledgeItem).where(
+                KnowledgeItem.id.in_(knowledge_ids),
+                KnowledgeItem.user_id == current_user.id,
+                KnowledgeItem.is_deleted == False,
+            )
+        )
+        knowledge = {item.id: item for item in result.scalars().all()}
+
+    contexts: dict[str, dict] = {}
+    for task in tasks:
+        input_params = task.input_params or {}
+        output_result = task.output_result or {}
+        context: dict = {}
+
+        document_id = _to_uuid(input_params.get("document_id") or output_result.get("document_id"))
+        if document_id and document_id in documents:
+            doc = documents[document_id]
+            context["document"] = {
+                "name": doc.original_filename or doc.filename,
+                "type": doc.doc_type,
+            }
+
+        reparse_source = output_result.get("reparse_source") if isinstance(output_result.get("reparse_source"), dict) else {}
+        source_document_id = _to_uuid(
+            input_params.get("source_document_id")
+            or output_result.get("source_document_id")
+            or reparse_source.get("source_document_id")
+        )
+        if source_document_id and source_document_id in documents:
+            doc = documents[source_document_id]
+            context["source_document"] = {
+                "name": doc.original_filename or doc.filename,
+                "type": doc.doc_type,
+            }
+
+        fact_id = _to_uuid(input_params.get("fact_id") or output_result.get("fact_id"))
+        if fact_id and fact_id in facts:
+            fact = facts[fact_id]
+            context["fact"] = {
+                "title": _fact_label(fact),
+                "category": fact.category,
+                "content": fact.content,
+            }
+
+        requested_fact_ids = [
+            parsed for parsed in (_to_uuid(value) for value in input_params.get("fact_ids", []))
+            if parsed and parsed in facts
+        ]
+        if requested_fact_ids:
+            context["facts"] = [
+                {
+                    "title": _fact_label(facts[item_id]),
+                    "category": facts[item_id].category,
+                    "content": facts[item_id].content,
+                }
+                for item_id in requested_fact_ids
+            ]
+
+        section_id = _to_uuid(input_params.get("section_id") or output_result.get("section_id"))
+        if section_id and section_id in sections:
+            section = sections[section_id]
+            context["section"] = {
+                "title": section.section_title,
+                "version": section.version,
+            }
+
+        requested_knowledge_ids = [
+            parsed for parsed in (_to_uuid(value) for value in input_params.get("knowledge_ids", []))
+            if parsed and parsed in knowledge
+        ]
+        if requested_knowledge_ids:
+            context["knowledge_refs"] = [
+                {
+                    "title": knowledge[item_id].title,
+                    "type": knowledge[item_id].item_type,
+                }
+                for item_id in requested_knowledge_ids
+            ]
+        else:
+            refs = input_params.get("knowledge_refs") or output_result.get("knowledge_refs") or []
+            if isinstance(refs, list):
+                context["knowledge_refs"] = [
+                    {
+                        "title": str(item.get("title") or item.get("id") or ""),
+                        "type": str(item.get("type") or ""),
+                    }
+                    for item in refs
+                    if isinstance(item, dict) and (item.get("title") or item.get("id"))
+                ]
+
+        strategy = input_params.get("strategy") or output_result.get("strategy")
+        if strategy:
+            context["strategy_name"] = STRATEGY_LABELS.get(str(strategy), str(strategy))
+
+        contexts[str(task.id)] = context
+    return contexts
+
+
+def _agent_task_summary(task: AgentTask) -> dict:
+    output = task.output_result or {}
+    input_params = task.input_params or {}
+    task_type = str(task.task_type.value if hasattr(task.task_type, "value") else task.task_type)
+    if task_type == AgentTaskType.fact_extract.value:
+        diagnostics = output.get("diagnostics") or {}
+        coverage = diagnostics.get("coverage") or {}
+        return {
+            "document_name": output.get("document_name") or input_params.get("document_name"),
+            "facts_extracted": output.get("facts_extracted"),
+            "doc_type": output.get("doc_type") or input_params.get("doc_type"),
+            "text_quality": diagnostics.get("text_quality"),
+            "chunk_count": diagnostics.get("chunk_count"),
+            "coverage_score": coverage.get("coverage_score"),
+            "potential_gap_count": coverage.get("potential_gap_count"),
+            "warning": output.get("warning"),
+        }
+    if task_type == AgentTaskType.fact_reparse.value:
+        return {
+            "fact_category": output.get("fact_category") or input_params.get("fact_category"),
+            "source_document": output.get("source_document"),
+            "knowledge_ref_count": output.get("knowledge_ref_count"),
+            "fallback_used": output.get("fallback_used"),
+            "source_text_chars": output.get("source_text_chars"),
+        }
+    if task_type == AgentTaskType.draft_generate.value:
+        return {
+            "title": input_params.get("title"),
+            "strategy": input_params.get("strategy"),
+            "fact_count": output.get("fact_count"),
+            "knowledge_ref_count": output.get("knowledge_ref_count"),
+            "versions": output.get("versions"),
+        }
+    if task_type == AgentTaskType.rewrite_section.value:
+        return {
+            "section_id": input_params.get("section_id"),
+            "strategy": output.get("strategy") or input_params.get("strategy"),
+            "knowledge_ref_count": output.get("knowledge_ref_count"),
+            "history_ref_count": output.get("history_ref_count"),
+        }
+    return {}
 
 
 def attachment_headers(filename: str) -> dict[str, str]:
@@ -59,6 +314,28 @@ class GenerateRequest(BaseModel):
 class UpdateSectionRequest(BaseModel):
     content_preview: str | None = None
     section_title: str | None = None
+
+
+async def _validate_user_knowledge_ids(db: DB, knowledge_ids: list[str], current_user: CurrentUser) -> list[str]:
+    if not knowledge_ids:
+        return []
+    try:
+        parsed_ids = [uuid.UUID(item_id) for item_id in knowledge_ids]
+    except ValueError as exc:
+        raise HTTPException(400, "Invalid knowledge id") from exc
+
+    result = await db.execute(
+        select(KnowledgeItem.id).where(
+            KnowledgeItem.id.in_(parsed_ids),
+            KnowledgeItem.user_id == current_user.id,
+            KnowledgeItem.is_deleted == False,
+        )
+    )
+    requested_ids = [str(item_id) for item_id in parsed_ids]
+    valid_ids = {str(item_id) for item_id in result.scalars().all()}
+    if len(valid_ids) != len(set(requested_ids)):
+        raise HTTPException(400, "Invalid or unauthorized knowledge id")
+    return requested_ids
 
 
 def _draft_order(sort_by: str, sort_order: str):
@@ -145,6 +422,25 @@ async def generate_drafts(case_id: uuid.UUID, body: GenerateRequest, current_use
     Creates an AgentTask record and dispatches to worker queue.
     """
     await _ensure_case_access(db, case_id, current_user)
+    knowledge_ids = await _validate_user_knowledge_ids(db, body.knowledge_ids, current_user)
+    await release_stale_agent_tasks(db, case_id=case_id, task_types=[AgentTaskType.draft_generate], commit=False)
+    running_result = await db.execute(
+        select(AgentTask).where(
+            AgentTask.case_id == case_id,
+            AgentTask.task_type == AgentTaskType.draft_generate,
+            AgentTask.status.in_([AgentTaskStatus.queued, AgentTaskStatus.processing]),
+        )
+        .order_by(AgentTask.created_at.desc())
+        .limit(1)
+    )
+    running_task = running_result.scalar_one_or_none()
+    if running_task:
+        return {
+            "case_id": str(case_id),
+            "agent_task_id": str(running_task.id),
+            "status": str(running_task.status.value if hasattr(running_task.status, "value") else running_task.status),
+            "message": "已有文案生成任务正在处理中，请稍候完成后再发起新的生成。",
+        }
     # Create agent task record
     agent_task = AgentTask(
         case_id=case_id,
@@ -154,7 +450,7 @@ async def generate_drafts(case_id: uuid.UUID, body: GenerateRequest, current_use
             "title": body.title,
             "prompt": body.prompt,
             "strategy": body.strategy,
-            "knowledge_ids": body.knowledge_ids,
+            "knowledge_ids": knowledge_ids,
             "fact_ids": body.fact_ids,
         },
         status=AgentTaskStatus.queued,
@@ -444,6 +740,7 @@ async def rewrite_section(
     Uses Redis distributed lock to prevent concurrent edits.
     """
     section = await _get_section_for_user(section_id, current_user, db)
+    knowledge_ids = await _validate_user_knowledge_ids(db, body.knowledge_ids, current_user)
 
     # Create agent task
     agent_task = AgentTask(
@@ -453,7 +750,7 @@ async def rewrite_section(
             "section_id": str(section_id),
             "instruction": body.instruction,
             "strategy": body.strategy,
-            "knowledge_ids": body.knowledge_ids,
+            "knowledge_ids": knowledge_ids,
             "fact_ids": body.fact_ids,
         },
         status=AgentTaskStatus.queued,
@@ -555,6 +852,7 @@ async def list_agent_tasks(
     ):
     """List all agent tasks for a case (for progress monitoring)."""
     await _ensure_case_access(db, case_id, current_user)
+    await release_stale_agent_tasks(db, case_id=case_id)
     order = AgentTask.updated_at.asc() if sort_order == "asc" else AgentTask.updated_at.desc()
     result = await db.execute(
         select(AgentTask)
@@ -563,11 +861,12 @@ async def list_agent_tasks(
         .limit(20)
     )
     tasks = result.scalars().all()
+    human_contexts = await _agent_task_human_context(db, case_id, current_user, tasks)
     return [
         {
             "id": str(t.id),
             "task_type": t.task_type,
-            "status": t.status,
+            "status": str(t.status.value if hasattr(t.status, "value") else t.status),
             "priority": t.priority,
             "llm_model": t.llm_model,
             "created_at": local_iso(t.created_at),
@@ -575,6 +874,10 @@ async def list_agent_tasks(
             "latency_ms": t.latency_ms or 0,
             "token_usage": t.token_usage or 0,
             "error_message": t.error_message,
+            "input_params": _compact_agent_payload(t.input_params or {}),
+            "output_result": _compact_agent_payload(t.output_result or {}),
+            "summary": _compact_agent_payload(_agent_task_summary(t)),
+            "human_context": _compact_agent_payload(human_contexts.get(str(t.id), {})),
         }
         for t in tasks
     ]

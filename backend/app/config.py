@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379/0"
     CACHE_ENABLED: bool = True
     CACHE_TTL_SECONDS: int = 45
+    ADMIN_CACHE_TTL_SECONDS: int = 15
 
     # Object Storage (Cloudflare R2 / MinIO - S3 compatible)
     STORAGE_ENDPOINT_URL: str = ""          # e.g. https://<id>.r2.cloudflarestorage.com
@@ -51,6 +52,39 @@ class Settings(BaseSettings):
     LLM_CACHE_TTL_SECONDS: int = 900
     LLM_TIMEOUT_SECONDS: float = 120.0
 
+    # Draft generation budgets. Remote LLM endpoints are much more reliable when
+    # each job has a bounded prompt and output size.
+    DRAFT_MAX_FACTS: int = 24
+    DRAFT_MAX_FACT_CHARS: int = 700
+    DRAFT_MAX_FACT_QUOTE_CHARS: int = 260
+    DRAFT_MAX_KNOWLEDGE_ITEMS: int = 4
+    DRAFT_MAX_KNOWLEDGE_CHARS: int = 1200
+    DRAFT_MAX_USER_PROMPT_CHARS: int = 2500
+    DRAFT_GENERATION_MAX_TOKENS: int = 2400
+    DRAFT_CUSTOM_MAX_TOKENS: int = 1800
+    DRAFT_REWRITE_MAX_TOKENS: int = 1800
+    DRAFT_TASK_SOFT_TIME_LIMIT_SECONDS: int = 420
+    DRAFT_TASK_TIME_LIMIT_SECONDS: int = 480
+
+    # Document parsing budgets.
+    PARSE_MAX_CONTENT_CHARS: int = 8500
+    PARSE_MAX_LAWYER_GUIDANCE_CHARS: int = 1800
+    PARSE_MAX_FACTS: int = 18
+    PARSE_MAX_OUTPUT_TOKENS: int = 1800
+    PARSE_MIN_READABLE_TEXT_CHARS: int = 10
+    PARSE_RESUME_MAX_FACTS: int = 32
+    PARSE_RESUME_MAX_OUTPUT_TOKENS: int = 2800
+    PARSE_CHUNK_MAX_CHARS: int = 5200
+    PARSE_CHUNK_OVERLAP_CHARS: int = 450
+    PARSE_MAX_CHUNKS: int = 5
+    PARSE_TASK_SOFT_TIME_LIMIT_SECONDS: int = 900
+    PARSE_TASK_TIME_LIMIT_SECONDS: int = 960
+
+    # Agent task watchdog. If a worker is killed or a broker delivery is lost,
+    # queued/processing records can otherwise keep UI actions locked forever.
+    AGENT_TASK_QUEUED_TIMEOUT_MINUTES: int = 10
+    AGENT_TASK_PROCESSING_TIMEOUT_MINUTES: int = 18
+
     # Celery
     CELERY_BROKER_URL: str = "redis://localhost:6379/1"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"
@@ -68,6 +102,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     REQUEST_LOG_ENABLED: bool = True
     SQL_ECHO: bool = False
+    SYSTEM_ADMIN_EMAILS: str = ""
 
 
 settings = Settings()

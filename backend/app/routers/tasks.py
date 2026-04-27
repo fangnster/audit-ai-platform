@@ -63,6 +63,7 @@ def _task_payload(t: LawyerTask) -> dict:
 async def _invalidate_task_cache(case_id: uuid.UUID) -> None:
     await delete_pattern(f"tasks:{case_id}:*")
     await delete_pattern(f"{TASK_CACHE_PREFIX}:{case_id}:*")
+    await delete_pattern("admin:v1:*")
 
 
 async def _get_task_for_user(task_id: uuid.UUID, current_user, db: DB) -> LawyerTask:

@@ -34,11 +34,17 @@ export const authApi = {
     const form = new URLSearchParams({ username: email, password })
     return api.post('/auth/login', form, { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } })
   },
-  register: (email: string, name: string, password: string, passwordConfirm: string, orgName: string) =>
-    api.post('/auth/register', { email, name, password, password_confirm: passwordConfirm, org_name: orgName.trim() }),
+  register: (email: string, name: string, password: string, passwordConfirm: string, firmName?: string) =>
+    api.post('/auth/register', {
+      email,
+      name,
+      password,
+      password_confirm: passwordConfirm,
+      ...(firmName?.trim() ? { firm_name: firmName.trim() } : {}),
+    }),
   me: (token?: string) =>
     api.get('/auth/me', token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
-  updateMe: (data: { name?: string; phone?: string }) =>
+  updateMe: (data: { name?: string; firm_name?: string; phone?: string }) =>
     api.patch('/auth/me', data),
   changePassword: (data: { current_password: string; new_password: string; new_password_confirm: string }) =>
     api.patch('/auth/me/password', data),
@@ -65,6 +71,9 @@ export const casesApi = {
 
 // ── Documents ─────────────────────────────
 export const docsApi = {
+  types: () => api.get('/documents/types'),
+  updateTypes: (items: Array<{ id: string; label: string; icon?: string; enabled?: boolean; builtin?: boolean }>) =>
+    api.patch('/documents/types', { items }),
   list: (caseId: string, docType?: string) =>
     api.get(`/documents/cases/${caseId}/documents`, { params: docType ? { doc_type: docType } : {} }),
   trash: (caseId: string) =>
@@ -94,8 +103,8 @@ export const factsApi = {
   list: (caseId: string, params?: PaginationParams) => api.get(`/facts/cases/${caseId}/facts`, { params }),
   trash: (caseId: string, params?: PaginationParams) => api.get(`/facts/cases/${caseId}/facts/trash`, { params }),
   approve: (factId: string) => api.post(`/facts/${factId}/approve`),
-  dispute: (factId: string, comment: string) =>
-    api.post(`/facts/${factId}/dispute`, { comment }),
+  dispute: (factId: string, comment: string, knowledgeIds?: string[]) =>
+    api.post(`/facts/${factId}/dispute`, { comment, knowledge_ids: knowledgeIds || [] }),
   confirm: (factId: string) => api.post(`/facts/${factId}/approve`),  // kept for backward compat, maps to approve
   update: (factId: string, data: { content?: string; category?: string }) =>
     api.patch(`/facts/${factId}`, data),
@@ -173,11 +182,25 @@ export const translateApi = {
 }
 
 export const orgApi = {
-  me: () => api.get('/orgs/me'),
   settings: () => api.get('/orgs/me/settings'),
   updateSettings: (data: { llm_provider?: string; llm_model?: string; llm_base_url?: string; api_key?: string }) =>
     api.patch('/orgs/me/settings', data),
   testGeneration: () => api.post('/orgs/me/settings/test-generation', {}),
+}
+
+export const adminApi = {
+  overview: () => api.get('/admin/overview'),
+  cases: (params?: { q?: string; page?: number; page_size?: number; sort_by?: string; sort_order?: 'asc'|'desc' }) =>
+    api.get('/admin/cases', { params }),
+  users: (params?: { q?: string; page?: number; page_size?: number; sort_by?: string; sort_order?: 'asc'|'desc' }) =>
+    api.get('/admin/users', { params }),
+  updateUser: (id: string, data: { is_active?: boolean; is_system_admin?: boolean }) =>
+    api.patch(`/admin/users/${id}`, data),
+  resetUserPassword: (id: string, data: { new_password: string; new_password_confirm: string }) =>
+    api.patch(`/admin/users/${id}/password`, data),
+  deleteUser: (id: string) => api.delete(`/admin/users/${id}`),
+  deleteCase: (id: string) => api.delete(`/admin/cases/${id}`),
+  recentCases: (limit?: number) => api.get('/admin/cases/recent', { params: limit ? { limit } : {} }),
 }
 
 // ── Knowledge Base ────────────────────────

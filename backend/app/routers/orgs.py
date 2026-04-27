@@ -2,16 +2,13 @@ from __future__ import annotations
 
 import uuid
 import time
-from typing import Annotated
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
-from app.database import get_db
-from app.models.organization import Organization, OrgMember, Team, MemberRole
+from app.models.organization import MemberRole
 from app.deps import CurrentUser, DB
 from app.llm.provider import LLMProviderError, LLMService
+from app.services.todo_org import get_or_create_todo_org
 
 router = APIRouter()
 
@@ -27,6 +24,10 @@ class OrgResponse(BaseModel):
     plan: str
     settings: dict
     model_config = {"from_attributes": True}
+
+
+class UpdateOrgRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
 
 
 class InviteRequest(BaseModel):
@@ -90,17 +91,8 @@ def _validate_test_config(base_url: str) -> None:
 
 @router.post("", response_model=OrgResponse, status_code=201)
 async def create_org(body: CreateOrgRequest, current_user: CurrentUser, db: DB):
-    result = await db.execute(select(Organization).where(Organization.slug == body.slug))
-    if result.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="Slug already taken")
-
-    org = Organization(name=body.name, slug=body.slug)
-    db.add(org)
-    await db.flush()
-
-    # Creator becomes firm_admin
-    member = OrgMember(org_id=org.id, user_id=current_user.id, role=MemberRole.firm_admin)
-    db.add(member)
+    # TODO(org): organization creation is parked. Keep one compatibility shell per user.
+    org = await get_or_create_todo_org(db, current_user, body.name)
     await db.commit()
     await db.refresh(org)
     return org
@@ -108,27 +100,30 @@ async def create_org(body: CreateOrgRequest, current_user: CurrentUser, db: DB):
 
 @router.get("/me", response_model=OrgResponse)
 async def get_my_org(current_user: CurrentUser, db: DB):
-    result = await db.execute(
-        select(Organization)
-        .join(OrgMember, OrgMember.org_id == Organization.id)
-        .where(OrgMember.user_id == current_user.id)
-    )
-    org = result.scalars().first()
-    if not org:
-        raise HTTPException(status_code=404, detail="No organization found")
+    # TODO(org): return the compatibility shell only.
+    org = await get_or_create_todo_org(db, current_user)
+    await db.commit()
+    await db.refresh(org)
+    return org
+
+
+@router.patch("/me", response_model=OrgResponse)
+async def update_my_org(body: UpdateOrgRequest, current_user: CurrentUser, db: DB):
+    # TODO(org): only the display name is editable while org/law-firm business logic is parked.
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="公司/律所名称不能为空")
+    org = await get_or_create_todo_org(db, current_user)
+    org.name = name
+    await db.commit()
+    await db.refresh(org)
     return org
 
 
 @router.patch("/me/settings")
 async def update_my_org_settings(body: UpdateOrgSettingsRequest, current_user: CurrentUser, db: DB):
-    result = await db.execute(
-        select(Organization)
-        .join(OrgMember, OrgMember.org_id == Organization.id)
-        .where(OrgMember.user_id == current_user.id)
-    )
-    org = result.scalars().first()
-    if not org:
-        raise HTTPException(status_code=404, detail="No organization found")
+    # TODO(org): model settings are stored on the compatibility shell for now.
+    org = await get_or_create_todo_org(db, current_user)
 
     org.settings = _merge_llm_settings(org.settings, body)
     await db.commit()
@@ -137,27 +132,17 @@ async def update_my_org_settings(body: UpdateOrgSettingsRequest, current_user: C
 
 @router.get("/me/settings")
 async def get_my_org_settings(current_user: CurrentUser, db: DB):
-    result = await db.execute(
-        select(Organization)
-        .join(OrgMember, OrgMember.org_id == Organization.id)
-        .where(OrgMember.user_id == current_user.id)
-    )
-    org = result.scalars().first()
-    if not org:
-        raise HTTPException(status_code=404, detail="No organization found")
+    # TODO(org): model settings are stored on the compatibility shell for now.
+    org = await get_or_create_todo_org(db, current_user)
+    await db.commit()
     return _public_settings(org.settings)
 
 
 @router.post("/me/settings/test-generation")
 async def test_my_org_llm_generation(_body: UpdateOrgSettingsRequest, current_user: CurrentUser, db: DB):
-    result = await db.execute(
-        select(Organization)
-        .join(OrgMember, OrgMember.org_id == Organization.id)
-        .where(OrgMember.user_id == current_user.id)
-    )
-    org = result.scalars().first()
-    if not org:
-        raise HTTPException(status_code=404, detail="No organization found")
+    # TODO(org): model settings are stored on the compatibility shell for now.
+    org = await get_or_create_todo_org(db, current_user)
+    await db.commit()
 
     candidate_settings = dict(org.settings or {})
     service = LLMService()
@@ -194,75 +179,37 @@ async def test_my_org_llm_generation(_body: UpdateOrgSettingsRequest, current_us
 
 @router.get("/me/members")
 async def list_members(current_user: CurrentUser, db: DB):
-    result = await db.execute(
-        select(OrgMember)
-        .join(Organization, OrgMember.org_id == Organization.id)
-        .where(OrgMember.org_id.in_(
-            select(OrgMember.org_id).where(OrgMember.user_id == current_user.id)
-        ))
-    )
-    return [{"id": str(m.id), "user_id": str(m.user_id), "role": m.role} for m in result.scalars()]
+    # TODO(org): org/team membership is parked; expose only the current user shell.
+    org = await get_or_create_todo_org(db, current_user)
+    await db.commit()
+    return [{"id": str(org.id), "user_id": str(current_user.id), "role": "todo"}]
 
 
 @router.post("/me/invite")
 async def invite_member(body: InviteRequest, current_user: CurrentUser, db: DB):
-    """Generate invitation token (simplified - in production send email with token)."""
-    import secrets
-    token = secrets.token_urlsafe(32)
-    # TODO: store invite in Redis with TTL=72h, send email
-    return {"invite_token": token, "email": body.email, "role": body.role}
+    raise HTTPException(status_code=501, detail="Organization invitations are TODO")
 
 
 @router.post("/join/{token}")
 async def join_org(token: str, current_user: CurrentUser, db: DB):
-    """Accept invite and join organization."""
-    # TODO: retrieve invite from Redis by token, create OrgMember
-    return {"message": "Joined successfully"}
+    raise HTTPException(status_code=501, detail="Organization join is TODO")
 
 
 @router.delete("/me/members/{member_id}", status_code=204)
 async def remove_member(member_id: uuid.UUID, current_user: CurrentUser, db: DB):
-    result = await db.execute(select(OrgMember).where(OrgMember.id == member_id))
-    member = result.scalar_one_or_none()
-    if not member:
-        raise HTTPException(status_code=404, detail="Member not found")
-    await db.delete(member)
-    await db.commit()
+    raise HTTPException(status_code=501, detail="Organization members are TODO")
 
 
 @router.patch("/me/members/{member_id}/role")
 async def update_member_role(member_id: uuid.UUID, body: UpdateRoleRequest, current_user: CurrentUser, db: DB):
-    result = await db.execute(select(OrgMember).where(OrgMember.id == member_id))
-    member = result.scalar_one_or_none()
-    if not member:
-        raise HTTPException(status_code=404, detail="Member not found")
-    member.role = body.role
-    await db.commit()
-    return {"id": str(member.id), "role": member.role}
+    raise HTTPException(status_code=501, detail="Organization roles are TODO")
 
 
 @router.post("/me/teams", status_code=201)
 async def create_team(name: str, current_user: CurrentUser, db: DB):
-    result = await db.execute(
-        select(OrgMember).where(OrgMember.user_id == current_user.id)
-    )
-    member = result.scalars().first()
-    if not member:
-        raise HTTPException(status_code=403, detail="Not in any org")
-    team = Team(org_id=member.org_id, name=name)
-    db.add(team)
-    await db.commit()
-    await db.refresh(team)
-    return {"id": str(team.id), "name": team.name}
+    raise HTTPException(status_code=501, detail="Teams are TODO")
 
 
 @router.get("/me/teams")
 async def list_teams(current_user: CurrentUser, db: DB):
-    result = await db.execute(
-        select(OrgMember).where(OrgMember.user_id == current_user.id)
-    )
-    member = result.scalars().first()
-    if not member:
-        return []
-    teams = await db.execute(select(Team).where(Team.org_id == member.org_id))
-    return [{"id": str(t.id), "name": t.name} for t in teams.scalars()]
+    return []

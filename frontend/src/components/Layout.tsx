@@ -4,7 +4,7 @@ import { useAuthStore } from '../store/auth'
 import Breadcrumb from './Breadcrumb'
 import {
   LayoutDashboard, FolderOpen, FileText, BookOpen,
-  CheckSquare, Settings, LogOut, Globe, Scale
+  CheckSquare, Settings, LogOut, Globe, Scale, ShieldCheck
 } from 'lucide-react'
 
 export default function Layout() {
@@ -28,6 +28,11 @@ export default function Layout() {
     { to: '/cases',      icon: FolderOpen,      label: t('cases') },
     { to: '/knowledge',  icon: BookOpen,        label: t('knowledge') },
     { to: '/tasks',      icon: CheckSquare,     label: t('tasks') },
+    ...(user?.is_system_admin ? [{
+      to: '/admin',
+      icon: ShieldCheck,
+      label: i18n.language === 'zh' ? '系统后台' : 'Admin',
+    }] : []),
     { to: '/settings',   icon: Settings,        label: t('settings') },
   ]
 

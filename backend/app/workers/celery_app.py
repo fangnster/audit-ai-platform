@@ -51,6 +51,7 @@ celery_config = {
         "app.workers.agent_tasks.rewrite_section":   {"queue": "p1_lawyer_cmd"},
         "app.workers.agent_tasks.fix_fact":          {"queue": "p0_fact_fix"},
         "app.workers.document_tasks.parse_document": {"queue": "p2_parse"},
+        "app.workers.agent_tasks.reparse_fact":      {"queue": "p2_parse"},
         "app.workers.agent_tasks.generate_drafts":   {"queue": "p3_draft"},
         "app.workers.agent_tasks.generate_rfi":      {"queue": "p3_draft"},
     },

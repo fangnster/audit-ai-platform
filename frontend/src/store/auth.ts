@@ -5,6 +5,8 @@ interface User {
   id: string
   email: string
   name: string
+  firm_name?: string | null
+  is_system_admin?: boolean
   profile: Record<string, unknown>
 }
 

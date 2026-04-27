@@ -6,12 +6,15 @@
 
 ## 当前功能范围
 
-- 律师注册时登记律所/公司，个人信息可维护联系电话。
-- 案件支持状态流转、客户姓名/邮箱/电话维护；客户邮箱或电话至少填写一个。
-- 文档上传后由律师手动触发解析，解析弹窗支持知识库检索和提示词模板；文档页支持下载原始文件和导出当前文档全部事实的解析文案。
-- 一篇文档可抽取多条事实；事实可确认、编辑、翻译、删除、提出异议并基于异议重新解析。
-- Agent 文案生成支持跨事实、跨知识库材料组织内容，并统一清理模型输出中的 `<think>` 标签。
-- 任务中心支持新建、状态变更、标记完成、删除和恢复。
+- 律师注册时登记律所/公司，个人信息可维护联系电话和公司/律所名称；公司/律所当前只作为用户资料展示和编辑，不参与业务权限。
+- 案件支持状态流转、客户姓名/邮箱/电话维护、搜索、排序、分页、软删除、恢复和后台管理；客户邮箱或电话至少填写一个。
+- 文档上传后由律师手动触发后台解析，支持内置和自定义文件类型，包括原创成果；解析弹窗支持知识库检索和提示词模板；同一文件解析中会阻止重复触发。
+- 一篇文档可抽取多条事实；事实可确认、编辑、翻译、删除、提出异议并基于异议后台重解析；同一事实重解析中会阻止重复触发。
+- 知识库只按当前律师本人筛选，检索仅依靠标题和标签；解析/重解析只使用提示词模板和 Agent 策略，文案生成/AI 重写可使用全部知识库类型。
+- Agent 文案生成支持跨事实、跨知识库材料组织内容，并统一清理模型输出中的 `<think>` 标签；远端请求已加入输入预算、缓存、任务去重、超时释放和失败记录等保护。
+- 案件内提供独立「Agent 运行记录」，按文件解析和重解析、事实重解析、文案生成和 AI 重写分类展示输入、结果、诊断、错误和可读上下文。
+- 任务中心支持跨案件待办；案件内「案件任务」支持新建、状态变更、标记完成、删除和恢复。
+- 系统后台支持概览、用户/案件搜索分页排序、用户启停、管理员授权、重置密码、删除用户和案件。
 - 前端支持明亮版与经典暗色版两套主题，律师可在设置中自行选择。
 
 ---
@@ -27,6 +30,18 @@
 | LLM | MiniMax / OpenAI Compatible / Claude / Gemini / Ollama（可切换） |
 | 前端 | React 18 + TypeScript + Vite |
 | 容器化 | Docker + Docker Compose |
+
+---
+
+## 文档索引
+
+- [AI Agent 移民律师协作平台 V1.2 需求说明书](AI%20Agent%20移民律师协作平台%20V1.md)
+- [产品需求文档：当前实现版](docs/product_requirements.md)
+- [技术实现文档](docs/implementation.md)
+- [律师操作手册](docs/lawyer_user_manual.md)
+- [本地部署文档](docs/deployment_local_economical.md)
+- [远程部署文档](docs/deployment_remote_economical.md)
+- [远程维护与 CI/CD 运维档案](docs/remote_maintenance_runbook.md)
 
 ---
 
@@ -151,6 +166,10 @@ cp ../.env.example .env
 # 执行数据库迁移
 alembic upgrade head
 
+# 可选：配置系统管理员邮箱，多个邮箱用英文逗号分隔。
+# 匹配邮箱的用户注册或登录后会获得系统后台入口。
+# SYSTEM_ADMIN_EMAILS=admin@example.com
+
 # 启动 FastAPI（热重载模式）
 uvicorn app.main:app --reload --port 8000
 ```
@@ -178,6 +197,20 @@ npm run dev
 ---
 
 ## 数据库操作
+
+更多上线与远程维护流程见：[远程维护与 CI/CD 运维档案](docs/remote_maintenance_runbook.md)。
+
+数据库结构以 Alembic 迁移为准：`backend/migrations/versions/*.py`。当前结构快照仅作阅读和归档参考，见 [docs/database/schema.sql](docs/database/schema.sql)。
+
+### 配置第一个系统管理员
+
+在后端环境变量中设置 `SYSTEM_ADMIN_EMAILS`，然后让该邮箱用户注册或重新登录：
+
+```bash
+SYSTEM_ADMIN_EMAILS=admin@example.com
+```
+
+管理员登录后可在侧边栏进入“系统后台”，管理用户启停和系统管理员权限。
 
 ### 查看当前迁移状态
 
@@ -208,11 +241,18 @@ docker compose exec postgres psql -U postgres -d immigration_db
 ## 运行测试
 
 ```bash
-# 本地运行
+# 后端全量测试
 cd backend
 pip install -r requirements-dev.txt
 pytest tests/ -v --tb=short
+
+# 前端构建
+cd ../frontend
+npm ci
+npm run build
 ```
+
+上线前至少做一轮冒烟测试：管理员登录、创建案件、上传小文件并后台解析、在 Agent 运行记录查看解析结果、确认事实、选择少量事实生成文案、查看 Worker 日志无持续错误。
 
 ---
 
@@ -245,6 +285,8 @@ docker compose down -v
 
 - API 请求日志包含 `request_id`、路径、状态码和耗时。
 - Agent Worker 日志包含任务开始、完成、失败和重试；失败原因会写入 `agent_tasks.error_message`。
+- 文件解析、事实重解析、文案生成和 AI 重写都会写入案件内「Agent 运行记录」。记录中展示文件名、事实名、策略名、知识库标题等可读上下文，而不是只展示机器 ID。
+- 系统会自动释放超过保护时间仍停留在 `queued/processing` 的 Agent 任务，释放后按钮可重新触发，旧 Worker 返回时不会覆盖新结果。
 - Redis 用于队列、列表缓存和 LLM 短 TTL 缓存；Redis 异常时页面缓存会降级，但 Celery 队列会受影响。
 - 文档、事实、任务、文案、案件和会话接口会按案件成员校验权限，避免跨案件读写。
 
@@ -256,7 +298,7 @@ docker compose down -v
 
 - 远程部署：单台 VPS 或便宜托管云服务组合，见 [远程部署方案](docs/deployment_remote_economical.md)。
 - 本地部署：办公室电脑/内网服务器 + Docker Compose，并配置大模型调用，见 [本地部署方案](docs/deployment_local_economical.md)。
-- 律师使用说明：见 [律师使用说明书](docs/lawyer_user_manual.md)。
+- 律师使用说明：见 [律师操作手册](docs/lawyer_user_manual.md)。
 
 生产远程部署使用 `docker-compose.prod.yml` 和 `deploy/Caddyfile.prod`；开发和本机快速试用继续使用 `docker-compose.yml`。
 
@@ -281,7 +323,7 @@ imigrationAplication/
 │   ├── requirements.txt         # 运行时依赖
 │   └── requirements-dev.txt     # 本地测试依赖
 ├── frontend/                   # React 前端
-├── docs/                       # 使用说明和部署方案
+├── docs/                       # 需求、实现、部署、运维、数据库快照和用户手册
 ├── deploy/                     # 生产反向代理配置
 ├── docker-compose.yml          # 本地开发环境
 ├── docker-compose.prod.yml     # 单机生产部署
@@ -325,5 +367,6 @@ docker compose exec minio mc mb local/immigration-docs
 
 ## 联系与支持
 
-- **技术文档**：见 `implementation_plan.md`
+- **产品需求文档**：见 [docs/product_requirements.md](docs/product_requirements.md)
+- **技术实现文档**：见 [docs/implementation.md](docs/implementation.md)
 - **API 文档**：http://localhost:8000/api/docs（启动后访问）

@@ -32,6 +32,10 @@ export function useCaseWebSocket(caseId: string) {
           } else if (data.type === 'fact_fixed') {
             toast.success('事实更新，相关文案已同步刷新')
             qc.invalidateQueries({ queryKey: ['drafts', caseId] })
+          } else if (data.type === 'fact_reparsed') {
+            toast.success(t('factDisputeReparsed'))
+            qc.invalidateQueries({ queryKey: ['facts', caseId] })
+            qc.invalidateQueries({ queryKey: ['agentTasks', caseId] })
           } else if (data.type === 'rfi_generated') {
             toast.success('RFI 补件回复已生成')
             qc.invalidateQueries({ queryKey: ['agentTasks', caseId] })

@@ -10,6 +10,7 @@ from app.database import Base
 
 class AgentTaskType(str, PyEnum):
     fact_extract = "fact_extract"
+    fact_reparse = "fact_reparse"
     draft_generate = "draft_generate"
     rfi_generate = "rfi_generate"
     merge = "merge"

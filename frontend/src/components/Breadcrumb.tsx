@@ -28,6 +28,7 @@ export default function Breadcrumb() {
     '': t('dashboard'),
     'cases': t('cases'),
     'tasks': t('taskCenter'),
+    'agent-runs': t('agentRuns'),
     'knowledge': t('knowledge'),
     'settings': t('systemSettings'),
     'documents': t('documentUpload'),
@@ -51,8 +52,9 @@ export default function Breadcrumb() {
         path: pathAccum,
       })
     } else {
+      const isCaseTasks = seg === 'tasks' && /^[0-9a-f]{8}-/.test(segments[i - 1] || '')
       crumbs.push({
-        label: labelMap[seg] || seg,
+        label: isCaseTasks ? t('caseTasks') : labelMap[seg] || seg,
         path: pathAccum,
       })
     }

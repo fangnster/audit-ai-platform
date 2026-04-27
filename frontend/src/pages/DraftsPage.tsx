@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
@@ -10,6 +10,8 @@ import {
 } from 'lucide-react'
 import { draftsApi, sessionsApi, knowledgeApi, factsApi, translateApi } from '../api'
 import { useCaseWebSocket } from '../hooks/useWebSocket'
+import { AiWorkModal } from '../components/AiWorkModal'
+import type { AgentTask } from '../components/AgentRunLogPanel'
 import { ConfirmActionKind, ConfirmActionModal, ObjectLifecycleActions } from '../components/ObjectLifecycleActions'
 import { formatLocalDateTime } from '../utils/time'
 import { readableLlmError } from '../utils/llmError'
@@ -19,12 +21,19 @@ type Section = {
   section_title: string; content_preview: string; content?: string; status: string;
   created_at?: string | null; updated_at?: string | null;
 }
-type AgentTask = { id: string; task_type: string; status: string; created_at?: string | null; updated_at?: string | null }
-type KnowledgeItem = { id: string; title: string; item_type: string; content: string }
+type KnowledgeItem = { id: string; title: string; item_type: string; content: string; tags?: string[] }
 type FactItem = { id: string; category: string; content: string; status: string; confidence_score: number }
 type DraftRevision = {
   id: string; revision_number: number; section_title: string; content_preview: string; content: string;
   editor_role: string; change_summary: string; created_at?: string;
+}
+type TranslationState = {
+  id: string
+  title: string
+  original: string
+  content: string
+  loading?: boolean
+  error?: string
 }
 
 const STRATEGY_OPTIONS = [
@@ -33,29 +42,15 @@ const STRATEGY_OPTIONS = [
   { value: 'narrative', labelKey: 'strategyNarrative' },
   { value: 'criterion', labelKey: 'strategyCriterion' },
 ]
+type StrategyOption = { value: string; label: string }
 
 const PAGE_SIZE = 5
+const ACTIVE_AGENT_STATUSES = new Set(['processing', 'queued'])
+const DRAFT_AGENT_TYPES = new Set(['draft_generate', 'rewrite_section', 'rfi_generate'])
 const sectionStatusLabelKey: Record<string, string> = {
   draft: 'sectionStatusDraft',
   approved: 'sectionStatusApproved',
   locked: 'sectionStatusLocked',
-}
-
-const agentTaskTypeLabelKey: Record<string, string> = {
-  draft_generate: 'agentTaskDraftGenerate',
-  rewrite_section: 'agentTaskRewriteSection',
-  rfi_generate: 'agentTaskRfiGenerate',
-  fact_extract: 'agentTaskFactExtract',
-  merge: 'agentTaskMerge',
-  translate: 'agentTaskTranslate',
-}
-
-const agentTaskStatusLabelKey: Record<string, string> = {
-  queued: 'agentTaskQueued',
-  processing: 'agentTaskProcessing',
-  completed: 'agentTaskCompleted',
-  failed: 'agentTaskFailed',
-  cancelled: 'agentTaskCancelled',
 }
 
 export default function DraftsPage() {
@@ -76,10 +71,11 @@ export default function DraftsPage() {
   const [confirmPending, setConfirmPending] = useState(false)
   const [translateTarget, setTranslateTarget] = useState<'en' | 'zh'>('en')
   const [translatingId, setTranslatingId] = useState<string | null>(null)
-  const [translationDraft, setTranslationDraft] = useState<{ id: string; title: string; original: string; content: string } | null>(null)
+  const [translationDraft, setTranslationDraft] = useState<TranslationState | null>(null)
   const [historySection, setHistorySection] = useState<Section | null>(null)
   const [draftSortOrder, setDraftSortOrder] = useState<'asc' | 'desc'>('desc')
   const saveTimer = useRef<ReturnType<typeof setTimeout>>()
+  const translationCache = useRef<Map<string, string>>(new Map())
 
   // Prompt-based generation
   const [genTitle, setGenTitle] = useState('')
@@ -130,10 +126,11 @@ export default function DraftsPage() {
     refetchInterval: 5_000,
   })
   const agentTasks: AgentTask[] = tasksData?.data ?? []
-  const runningTask = agentTasks.find(t => t.status === 'processing' || t.status === 'queued')
+  const runningDraftTask = agentTasks.find(t => DRAFT_AGENT_TYPES.has(t.task_type) && ACTIVE_AGENT_STATUSES.has(t.status))
+  const runningGenerationTask = agentTasks.find(t => t.task_type === 'draft_generate' && ACTIVE_AGENT_STATUSES.has(t.status))
 
   useEffect(() => {
-    if (!agentTasks.some(t => t.status === 'processing' || t.status === 'queued')) {
+    if (!agentTasks.some(t => DRAFT_AGENT_TYPES.has(t.task_type) && ACTIVE_AGENT_STATUSES.has(t.status))) {
       qc.invalidateQueries({ queryKey: ['drafts', caseId] })
     }
   }, [agentTasks, caseId, qc])
@@ -148,7 +145,7 @@ export default function DraftsPage() {
     const normalized = term.trim().toLowerCase()
     if (!normalized) return knowledgeItems
     return knowledgeItems.filter(item => {
-      const text = `${item.title} ${item.content} ${item.item_type}`.toLowerCase()
+      const text = `${item.title} ${(item.tags || []).join(' ')}`.toLowerCase()
       return text.includes(normalized)
     })
   }
@@ -169,15 +166,35 @@ export default function DraftsPage() {
   const allFacts: FactItem[] = factsData?.data ?? []
   const approvedFacts = allFacts.filter((f: FactItem) => f.status === 'lawyer_approved')
 
+  const resetGenerationState = () => {
+    setShowGenModal(false)
+    setGenTitle('')
+    setGenPrompt('')
+    setGenStrategy('strongest_first')
+    setSelectedKnowledgeIds([])
+    setSelectedFactIds([])
+    setGenKnowledgeSearch('')
+  }
+
+  const resetRewriteState = () => {
+    setShowRewriteModal(false)
+    setRewriteSectionId(null)
+    setRewriteInstruction('')
+    setRewriteStrategy('strongest_first')
+    setRewriteFactIds([])
+    setRewriteKnowledgeIds([])
+    setRewriteKnowledgeSearch('')
+  }
+
   const generateMutation = useMutation({
     mutationFn: () => draftsApi.generate(caseId!, genTitle, genPrompt, genStrategy, selectedKnowledgeIds, selectedFactIds),
     onSuccess: (res) => {
       toast.success(res.data.message ?? '文案生成已启动')
       qc.invalidateQueries({ queryKey: ['agentTasks', caseId] })
       qc.invalidateQueries({ queryKey: ['drafts', caseId] })
-      setShowGenModal(false); setGenTitle(''); setGenPrompt(''); setGenStrategy('strongest_first'); setSelectedKnowledgeIds([]); setSelectedFactIds([]); setGenKnowledgeSearch('')
+      resetGenerationState()
     },
-    onError: (e: any) => toast.error(readableLlmError(e, i18n.language, 'generate')),
+    onError: (e: any) => toast.error(`${readableLlmError(e, i18n.language, 'generate')}：${genTitle || t('aiDraftGeneration')}`),
   })
 
   const rewriteMutation = useMutation({
@@ -185,11 +202,63 @@ export default function DraftsPage() {
       draftsApi.rewrite(sectionId, instr, strategy, knowledgeIds, factIds),
     onSuccess: () => {
       toast.success(t('fullDraftRewriteQueued'))
-      setShowRewriteModal(false); setRewriteSectionId(null); setRewriteInstruction(''); setRewriteStrategy('strongest_first'); setRewriteFactIds([]); setRewriteKnowledgeIds([]); setRewriteKnowledgeSearch('')
+      resetRewriteState()
       qc.invalidateQueries({ queryKey: ['agentTasks', caseId] })
     },
-    onError: (e: any) => toast.error(readableLlmError(e, i18n.language, 'rewrite')),
+    onError: (e: any) => toast.error(`${readableLlmError(e, i18n.language, 'rewrite')}：${displaySections.find(s => s.id === rewriteSectionId)?.section_title || ''}`),
   })
+
+  const closeGenerationModal = () => {
+    if (generateMutation.isPending) return
+    resetGenerationState()
+  }
+
+  const closeRewriteModal = () => {
+    if (rewriteMutation.isPending) return
+    resetRewriteState()
+  }
+
+  const buildStrategyOptions = (
+    mode: 'generation' | 'rewrite',
+    text: string,
+    selectedIds: string[],
+  ): StrategyOption[] => {
+    const normalized = text.toLowerCase()
+    const candidateFacts = selectedIds.length > 0
+      ? allFacts.filter(f => selectedIds.includes(f.id))
+      : allFacts
+    const categories = new Set(candidateFacts.map(f => f.category))
+    const options: StrategyOption[] = []
+    const add = (value: string, labelKey: string) => {
+      const label = t(labelKey)
+      if (!options.some(item => item.value === value && item.label === label)) {
+        options.push({ value, label })
+      }
+    }
+
+    if (/rfe|rfi|noid|补件|质疑|异议|回应/.test(normalized)) add('conservative', 'strategyRfeResponse')
+    if (/resume|cv|profile|bio|summary|简历|履历|个人综述|个人简介|背景/.test(normalized)) add('narrative', 'strategyResumeProfile')
+    if (/petition|申请信|申请书|请愿|criterion|criteria|要件|论证|eligibility|资格/.test(normalized)) add('criterion', 'strategyLegalCriteria')
+    if (categories.has('original_contribution') || categories.has('patent') || categories.has('publication') || categories.has('citation')) add('narrative', 'strategyOriginalContribution')
+    if (categories.has('award') || categories.has('media') || categories.has('membership')) add('strongest_first', 'strategyExternalRecognition')
+    if (categories.has('employment') || categories.has('salary')) add('criterion', 'strategyCriticalRole')
+    if (mode === 'rewrite') {
+      add('conservative', 'strategyRewriteTighten')
+      add('strongest_first', 'strategyRewriteKeepFacts')
+    }
+
+    STRATEGY_OPTIONS.forEach(option => add(option.value, option.labelKey))
+    return options
+  }
+
+  const generationStrategyOptions = useMemo(
+    () => buildStrategyOptions('generation', `${genTitle}\n${genPrompt}`, selectedFactIds),
+    [genTitle, genPrompt, selectedFactIds, allFacts, i18n.language],
+  )
+  const rewriteStrategyOptions = useMemo(
+    () => buildStrategyOptions('rewrite', rewriteInstruction, rewriteFactIds),
+    [rewriteInstruction, rewriteFactIds, allFacts, i18n.language],
+  )
 
   const restoreRevisionMutation = useMutation({
     mutationFn: ({ sectionId, revisionId }: { sectionId: string; revisionId: string }) =>
@@ -263,14 +332,34 @@ export default function DraftsPage() {
       return
     }
 
+    const sourceLang = targetLang === 'en' ? 'zh' : 'en'
+    const cacheKey = `${sourceLang}:${targetLang}:${original}`
+    const cached = translationCache.current.get(cacheKey)
+    setTranslateTarget(targetLang)
+    if (cached) {
+      setTranslationDraft({ id, title, original, content: cached })
+      return
+    }
+
     setTranslatingId(id)
+    setTranslationDraft({ id, title, original, content: '', loading: true })
     try {
-      const sourceLang = targetLang === 'en' ? 'zh' : 'en'
       const res = await translateApi.translate(original, sourceLang, targetLang)
-      setTranslateTarget(targetLang)
-      setTranslationDraft({ id, title, original, content: res.data.translated })
+      const translated = res.data.translated || ''
+      translationCache.current.set(cacheKey, translated)
+      setTranslationDraft((current) => (
+        current?.id === id && current.original === original
+          ? { id, title, original, content: translated }
+          : current
+      ))
     } catch (e: any) {
-      toast.error(readableLlmError(e, i18n.language, 'translate'))
+      const message = readableLlmError(e, i18n.language, 'translate')
+      setTranslationDraft((current) => (
+        current?.id === id && current.original === original
+          ? { ...current, loading: false, error: message }
+          : current
+      ))
+      toast.error(message)
     } finally {
       setTranslatingId(null)
     }
@@ -293,12 +382,6 @@ export default function DraftsPage() {
     }, 3000)
   }
   useEffect(() => { autoSave() }, [viewMode])
-
-  const taskStatusIcon = (status: string) => ({
-    queued: <Clock size={13} color="var(--warning)" />,
-    processing: <RefreshCw size={13} color="var(--accent-primary)" className="spin" />,
-    completed: <CheckCircle size={13} color="var(--success)" />,
-  }[status] ?? <Clock size={13} />)
 
   const toggleKnowledge = (id: string) => {
     setSelectedKnowledgeIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
@@ -416,15 +499,15 @@ export default function DraftsPage() {
             onClick={() => setViewMode('trash')}>
             <Archive size={14} /> {t('trash')}
           </button>
-          {runningTask && (
+          {runningDraftTask && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', background: 'rgba(79,142,247,0.1)', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(79,142,247,0.2)', fontSize: '0.8rem', color: 'var(--accent-primary)' }}>
               <RefreshCw size={13} /> {t('aiProcessing')}
             </div>
           )}
-          <button className="btn btn-ghost" onClick={() => handleDraftExport('docx')} disabled={draftExporting || !!runningTask} title={allSections.length > 0 ? t('downloadCurrentWordTitle') : t('downloadAllDraftsTitle')}>
+          <button className="btn btn-ghost" onClick={() => handleDraftExport('docx')} disabled={draftExporting || !!runningDraftTask} title={allSections.length > 0 ? t('downloadCurrentWordTitle') : t('downloadAllDraftsTitle')}>
             {draftExporting ? <span className="spinner" /> : <Download size={16} />} {allSections.length > 0 ? t('downloadCurrent') : t('downloadAll')}
           </button>
-          <button className="btn btn-gold" onClick={() => setShowGenModal(true)}>
+          <button className="btn btn-gold" onClick={() => setShowGenModal(true)} disabled={!!runningGenerationTask}>
             <Wand2 size={16} /> {t('generateDrafts')}
           </button>
         </div>
@@ -457,7 +540,7 @@ export default function DraftsPage() {
             <>
               <div style={{ fontSize: '2.5rem', marginBottom: 16 }}>✍️</div>
               <div style={{ marginBottom: 20 }}>{t('noDrafts')}</div>
-              <button className="btn btn-gold" onClick={() => setShowGenModal(true)}>
+              <button className="btn btn-gold" onClick={() => setShowGenModal(true)} disabled={!!runningGenerationTask}>
                 <Wand2 size={16} /> {t('generateDrafts')}
               </button>
             </>
@@ -578,76 +661,53 @@ export default function DraftsPage() {
         </>
       )}
 
-      {/* Agent tasks */}
-      {agentTasks.length > 0 && (
-        <div className="card" style={{ marginTop: 24, padding: '16px 20px' }}>
-          <div style={{ fontWeight: 600, marginBottom: 12, fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
-            📋 {t('agentRunLog')}
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {agentTasks.slice(0, 5).map(task => (
-              <div key={task.id} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: '0.8rem', padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
-                {taskStatusIcon(task.status)}
-                <span style={{ color: 'var(--text-secondary)' }}>
-                  {agentTaskTypeLabelKey[task.task_type] ? t(agentTaskTypeLabelKey[task.task_type]) : task.task_type}
-                </span>
-                <span className={`badge ${task.status === 'completed' ? 'badge-green' : task.status === 'failed' ? 'badge-red' : 'badge-gray'}`} style={{ fontSize: '0.68rem' }}>
-                  {agentTaskStatusLabelKey[task.status] ? t(agentTaskStatusLabelKey[task.status]) : task.status}
-                </span>
-                <span style={{ marginLeft: 'auto', color: 'var(--text-muted)' }}>
-                  {t('updatedAt')}: {formatLocalDateTime(task.updated_at || task.created_at, i18n.language)}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* Generate Modal */}
       {showGenModal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }}>
-          <div className="card fade-up" style={{ width: 640, maxHeight: '85vh', overflow: 'auto', padding: 32 }}>
-            <h2 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: 20 }}>
-              <Wand2 size={18} style={{ verticalAlign: 'middle', marginRight: 8 }} />
-              {t('aiDraftGeneration')}
-            </h2>
-
+        <AiWorkModal
+          icon={<Wand2 size={18} />}
+          title={t('aiDraftGeneration')}
+          subtitle={t('generationHint')}
+          onClose={closeGenerationModal}
+          closeDisabled={generateMutation.isPending}
+          closeTitle={t('close')}
+          accent="gold"
+        >
             <div className="form-group" style={{ marginBottom: 16 }}>
               <label className="form-label">{t('draftTitle')}</label>
               <input className="form-input" value={genTitle} onChange={e => setGenTitle(e.target.value)}
                 placeholder={t('draftTitlePlaceholder')} />
             </div>
 
-            <div className="form-group" style={{ marginBottom: 20 }}>
+            <div className="form-group ai-work-modal-section">
               <label className="form-label">{t('generationInstruction')}</label>
-              <textarea className="form-textarea" rows={5} value={genPrompt} onChange={e => setGenPrompt(e.target.value)}
+              <textarea className="form-textarea" rows={7} value={genPrompt} onChange={e => setGenPrompt(e.target.value)}
                 placeholder={t('generationPlaceholder')} />
               <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
                 {t('generationHint')}
               </span>
             </div>
 
-            <div className="form-group" style={{ marginBottom: 20 }}>
+            <div className="form-group ai-work-modal-section">
               <label className="form-label">{t('lawyerStrategy')}</label>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                 {t('lawyerStrategyHint')}
               </div>
               <div className="form-label" style={{ marginTop: 10 }}>{t('strategyMode')}</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-                {STRATEGY_OPTIONS.map(option => (
+                {generationStrategyOptions.map(option => (
                   <button
-                    key={option.value}
+                    key={`${option.value}-${option.label}`}
                     className={`btn btn-sm ${genStrategy === option.value ? 'btn-primary' : 'btn-ghost'}`}
-                    onClick={() => applyGenerationStrategy(option.value, t(option.labelKey))}
+                    onClick={() => applyGenerationStrategy(option.value, option.label)}
                   >
-                    {t(option.labelKey)}
+                    {option.label}
                   </button>
                 ))}
               </div>
             </div>
 
             {/* Fact Selection */}
-            <div className="form-group" style={{ marginBottom: 20 }}>
+            <div className="form-group ai-work-modal-section">
               <label className="form-label" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <span>📋 {t('selectFacts', { total: allFacts.length, approved: approvedFacts.length })}</span>
                 <span style={{ display: 'flex', gap: 8 }}>
@@ -670,7 +730,7 @@ export default function DraftsPage() {
                   {t('noFactsForDraft')}
                 </div>
               ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 200, overflowY: 'auto', padding: 8, border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
+                <div className="ai-work-modal-scroll-list">
                   {allFacts.map(f => (
                     <label key={f.id} style={{
                       display: 'flex', alignItems: 'flex-start', gap: 10, padding: '6px 10px',
@@ -682,7 +742,7 @@ export default function DraftsPage() {
                         onChange={() => toggleFact(f.id)} style={{ accentColor: 'var(--accent-primary)', marginTop: 2 }} />
                       <span className="badge badge-gray" style={{ fontSize: '0.68rem', flexShrink: 0 }}>{f.category}</span>
                       <span className={`badge ${f.status === 'lawyer_approved' ? 'badge-green' : 'badge-gray'}`} style={{ fontSize: '0.68rem', flexShrink: 0 }}>
-                        {f.status === 'lawyer_approved' ? t('confirmed') : t('awaitingClient')}
+                        {f.status === 'lawyer_approved' ? t('confirmed') : f.status === 'candidate' ? t('candidateFact') : t('awaitingClient')}
                       </span>
                       <span style={{ color: 'var(--text-secondary)', lineHeight: 1.4 }}>{f.content.substring(0, 120)}{f.content.length > 120 ? '…' : ''}</span>
                       {f.confidence_score >= 0.8 && (
@@ -699,7 +759,7 @@ export default function DraftsPage() {
             </div>
 
             {knowledgeItems.length > 0 && (
-              <div className="form-group" style={{ marginBottom: 20 }}>
+              <div className="form-group ai-work-modal-section">
                 <label className="form-label">
                   <BookOpen size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
                   {t('knowledgeReferenceOptional')}
@@ -714,7 +774,7 @@ export default function DraftsPage() {
                     style={{ height: 34, paddingLeft: 34 }}
                   />
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 200, overflowY: 'auto', padding: 8, border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
+                <div className="ai-work-modal-scroll-list">
                   {generationKnowledgeItems.length === 0 ? (
                     <div style={{ padding: 14, textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
                       {t('noKnowledgeMatches')}
@@ -742,58 +802,55 @@ export default function DraftsPage() {
               </div>
             )}
 
-            <div style={{ display: 'flex', gap: 12 }}>
-              <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => { setShowGenModal(false); setGenTitle(''); setGenPrompt(''); setGenStrategy('strongest_first'); setSelectedKnowledgeIds([]); setSelectedFactIds([]); setGenKnowledgeSearch('') }}>{t('cancel')}</button>
-              <button className="btn btn-gold" style={{ flex: 1 }} onClick={() => generateMutation.mutate()}
-                disabled={!genPrompt.trim() || selectedFactIds.length === 0 || generateMutation.isPending}>
+            <div className="ai-work-modal-actions">
+              <button className="btn btn-ghost" onClick={closeGenerationModal} disabled={generateMutation.isPending}>{t('cancel')}</button>
+              <button className="btn btn-gold" onClick={() => generateMutation.mutate()}
+                disabled={!genPrompt.trim() || selectedFactIds.length === 0 || generateMutation.isPending || !!runningGenerationTask}>
                 {generateMutation.isPending ? <span className="spinner" /> : <Wand2 size={16} />}
                 {t('startGenerate')}
               </button>
             </div>
-          </div>
-        </div>
+        </AiWorkModal>
       )}
 
       {/* Rewrite Modal */}
       {showRewriteModal && rewriteSectionId && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }}>
-          <div className="card fade-up" style={{ width: 640, maxHeight: '85vh', overflow: 'auto', padding: 32 }}>
-            <h2 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: 20 }}>
-              <Wand2 size={18} style={{ verticalAlign: 'middle', marginRight: 8 }} />
-              {t('aiFullDraftRewrite')}
-              <span style={{ fontSize: '0.8rem', fontWeight: 400, color: 'var(--text-secondary)', marginLeft: 8 }}>
-                {displaySections.find(s => s.id === rewriteSectionId)?.section_title}
-              </span>
-            </h2>
-
-            <div className="form-group" style={{ marginBottom: 20 }}>
+        <AiWorkModal
+          icon={<Wand2 size={18} />}
+          title={t('aiFullDraftRewrite')}
+          subtitle={displaySections.find(s => s.id === rewriteSectionId)?.section_title}
+          onClose={closeRewriteModal}
+          closeDisabled={rewriteMutation.isPending}
+          closeTitle={t('close')}
+        >
+            <div className="form-group ai-work-modal-section">
               <label className="form-label">{t('rewriteInstructionFull')}</label>
-              <textarea className="form-textarea" rows={4} value={rewriteInstruction}
+              <textarea className="form-textarea" rows={7} value={rewriteInstruction}
                 onChange={e => setRewriteInstruction(e.target.value)}
                 placeholder={t('rewriteInstructionPlaceholder')} />
             </div>
 
-            <div className="form-group" style={{ marginBottom: 20 }}>
+            <div className="form-group ai-work-modal-section">
               <label className="form-label">{t('lawyerStrategy')}</label>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                 {t('lawyerStrategyHint')}
               </div>
               <div className="form-label" style={{ marginTop: 10 }}>{t('strategyMode')}</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-                {STRATEGY_OPTIONS.map(option => (
+                {rewriteStrategyOptions.map(option => (
                   <button
-                    key={option.value}
+                    key={`${option.value}-${option.label}`}
                     className={`btn btn-sm ${rewriteStrategy === option.value ? 'btn-primary' : 'btn-ghost'}`}
-                    onClick={() => applyRewriteStrategy(option.value, t(option.labelKey))}
+                    onClick={() => applyRewriteStrategy(option.value, option.label)}
                   >
-                    {t(option.labelKey)}
+                    {option.label}
                   </button>
                 ))}
               </div>
             </div>
 
             {/* Fact Selection for Rewrite */}
-            <div className="form-group" style={{ marginBottom: 20 }}>
+            <div className="form-group ai-work-modal-section">
               <label className="form-label" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <span>📋 {t('selectFacts', { total: allFacts.length, approved: approvedFacts.length })}</span>
                 <span style={{ display: 'flex', gap: 8 }}>
@@ -810,7 +867,7 @@ export default function DraftsPage() {
                 </span>
               </label>
               {allFacts.length > 0 && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 160, overflowY: 'auto', padding: 8, border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
+                <div className="ai-work-modal-scroll-list">
                   {allFacts.map(f => (
                     <label key={f.id} style={{
                       display: 'flex', alignItems: 'flex-start', gap: 10, padding: '5px 10px',
@@ -822,7 +879,7 @@ export default function DraftsPage() {
                         style={{ accentColor: 'var(--accent-primary)', marginTop: 2 }} />
                       <span className="badge badge-gray" style={{ fontSize: '0.68rem', flexShrink: 0 }}>{f.category}</span>
                       <span className={`badge ${f.status === 'lawyer_approved' ? 'badge-green' : 'badge-gray'}`} style={{ fontSize: '0.68rem', flexShrink: 0 }}>
-                        {f.status === 'lawyer_approved' ? t('confirmed') : t('awaitingClient')}
+                        {f.status === 'lawyer_approved' ? t('confirmed') : f.status === 'candidate' ? t('candidateFact') : t('awaitingClient')}
                       </span>
                       <span style={{ color: 'var(--text-secondary)' }}>{f.content.substring(0, 100)}{f.content.length > 100 ? '…' : ''}</span>
                     </label>
@@ -836,7 +893,7 @@ export default function DraftsPage() {
 
             {/* Agent style / knowledge references for Rewrite */}
             {knowledgeItems.length > 0 && (
-              <div className="form-group" style={{ marginBottom: 20 }}>
+              <div className="form-group ai-work-modal-section">
                 <label className="form-label">
                   <BookOpen size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
                   {t('knowledgeReferenceOptional')}
@@ -851,7 +908,7 @@ export default function DraftsPage() {
                     style={{ height: 34, paddingLeft: 34 }}
                   />
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 200, overflowY: 'auto', padding: 8, border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
+                <div className="ai-work-modal-scroll-list">
                   {rewriteKnowledgeItems.length === 0 ? (
                     <div style={{ padding: 14, textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
                       {t('noKnowledgeMatches')}
@@ -880,17 +937,16 @@ export default function DraftsPage() {
               </div>
             )}
 
-            <div style={{ display: 'flex', gap: 12 }}>
-              <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => { setShowRewriteModal(false); setRewriteSectionId(null); setRewriteStrategy('strongest_first'); setRewriteKnowledgeSearch('') }}>{t('cancel')}</button>
-              <button className="btn btn-primary" style={{ flex: 1 }}
+            <div className="ai-work-modal-actions">
+              <button className="btn btn-ghost" onClick={closeRewriteModal} disabled={rewriteMutation.isPending}>{t('cancel')}</button>
+              <button className="btn btn-primary"
                 onClick={() => rewriteMutation.mutate({ sectionId: rewriteSectionId, instr: rewriteInstruction, strategy: rewriteStrategy, factIds: rewriteFactIds, knowledgeIds: rewriteKnowledgeIds })}
                 disabled={!rewriteInstruction.trim() || rewriteMutation.isPending}>
                 {rewriteMutation.isPending ? <span className="spinner" /> : <Wand2 size={16} />}
                 {t('startRewrite')}
               </button>
             </div>
-          </div>
-        </div>
+        </AiWorkModal>
       )}
 
       {confirmAction && (
@@ -916,26 +972,40 @@ export default function DraftsPage() {
             </div>
             <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
               <button className={`btn btn-sm ${translateTarget === 'en' ? 'btn-primary' : 'btn-ghost'}`}
-                disabled={translatingId === translationDraft.id}
+                disabled={Boolean(translationDraft.loading)}
                 onClick={() => translateSectionContent(translationDraft.id, translationDraft.title, translationDraft.original, 'en')}>
                 {t('translateToEnglish')}
               </button>
               <button className={`btn btn-sm ${translateTarget === 'zh' ? 'btn-primary' : 'btn-ghost'}`}
-                disabled={translatingId === translationDraft.id}
+                disabled={Boolean(translationDraft.loading)}
                 onClick={() => translateSectionContent(translationDraft.id, translationDraft.title, translationDraft.original, 'zh')}>
                 {t('translateToChinese')}
               </button>
             </div>
-            <textarea
-              className="form-textarea"
-              rows={10}
-              value={translationDraft.content}
-              onChange={(e) => setTranslationDraft({ ...translationDraft, content: e.target.value })}
-              style={{ fontFamily: 'inherit', lineHeight: 1.7 }}
-            />
+            {translationDraft.loading ? (
+              <div className="form-textarea" style={{ minHeight: 220, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, color: 'var(--text-secondary)' }}>
+                <span className="spinner" />
+                {t('translating')}
+              </div>
+            ) : (
+              <>
+                {translationDraft.error && (
+                  <div style={{ color: 'var(--error)', fontSize: '0.82rem', marginBottom: 10 }}>
+                    {translationDraft.error}
+                  </div>
+                )}
+                <textarea
+                  className="form-textarea"
+                  rows={10}
+                  value={translationDraft.content}
+                  onChange={(e) => setTranslationDraft({ ...translationDraft, content: e.target.value, error: undefined })}
+                  style={{ fontFamily: 'inherit', lineHeight: 1.7 }}
+                />
+              </>
+            )}
             <div className="confirm-modal-actions">
               <button className="btn btn-ghost" onClick={() => setTranslationDraft(null)}>{t('cancel')}</button>
-              <button className="btn btn-primary" onClick={applyTranslation} disabled={updateMutation.isPending}>
+              <button className="btn btn-primary" onClick={applyTranslation} disabled={updateMutation.isPending || translationDraft.loading || !translationDraft.content.trim()}>
                 {updateMutation.isPending ? <span className="spinner" /> : <CheckCircle size={14} />}
                 {t('applyTranslation')}
               </button>

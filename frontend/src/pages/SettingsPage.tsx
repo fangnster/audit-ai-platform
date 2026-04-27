@@ -22,18 +22,14 @@ export default function SettingsPage() {
   const [name, setName] = useState(user?.name ?? '')
   const [email] = useState(user?.email ?? '')
   const [phone, setPhone] = useState(savedPhone)
+  const [firmName, setFirmName] = useState(user?.firm_name ?? '')
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [newPasswordConfirm, setNewPasswordConfirm] = useState('')
-  const { data: orgData } = useQuery({
-    queryKey: ['org-me'],
-    queryFn: () => orgApi.me(),
-  })
   const { data: orgSettingsData } = useQuery({
     queryKey: ['org-settings'],
     queryFn: () => orgApi.settings(),
   })
-  const org = orgData?.data
   const orgSettings = orgSettingsData?.data ?? {}
   const [llmProvider, setLlmProvider] = useState(orgSettings.llm_provider || 'minimax')
   const [llmModel, setLlmModel] = useState(orgSettings.llm_model || '')
@@ -69,7 +65,7 @@ export default function SettingsPage() {
   const apiKeyStatus = hasTypedApiKey
     ? (i18n.language === 'zh' ? '新 API Key 待保存' : 'New API key pending save')
     : apiKeySaved
-      ? (i18n.language === 'zh' ? '已保存组织 API Key' : 'Organization API key saved')
+      ? (i18n.language === 'zh' ? '已保存 API Key' : 'API key saved')
       : effectiveApiKeyConfigured
         ? (i18n.language === 'zh' ? '正在使用系统环境 API Key' : 'Using system environment API key')
         : (i18n.language === 'zh' ? '未配置 API Key' : 'No API key configured')
@@ -83,8 +79,8 @@ export default function SettingsPage() {
           : 'API key saved. Leaving this blank keeps it; enter a new key to replace it.')
       : effectiveApiKeyConfigured
         ? (i18n.language === 'zh'
-            ? '当前由后端环境变量提供；输入新 Key 并保存后，会改用组织级配置。'
-            : 'Provided by backend environment variables. Enter and save a new key to use an organization-level key.')
+            ? '当前由后端环境变量提供；输入新 Key 并保存后，会改用已保存配置。'
+            : 'Provided by backend environment variables. Enter and save a new key to use the saved configuration.')
         : isLocalProvider
           ? (i18n.language === 'zh'
               ? '本地或 Ollama 通常可留空；如网关要求鉴权请填写。'
@@ -110,11 +106,13 @@ export default function SettingsPage() {
   useEffect(() => {
     setName(user?.name ?? '')
     setPhone(typeof user?.profile?.phone === 'string' ? user.profile.phone : '')
-  }, [user?.id])
+    setFirmName(user?.firm_name ?? '')
+  }, [user?.id, user?.name, user?.firm_name, user?.profile])
 
   const saveProfileMutation = useMutation({
     mutationFn: () => authApi.updateMe({
       name: name.trim(),
+      firm_name: firmName.trim(),
       phone: phone.trim(),
     }),
     onSuccess: (res) => {
@@ -197,6 +195,10 @@ export default function SettingsPage() {
   ]
 
   const handleSave = () => {
+    if (!firmName.trim()) {
+      toast.error('请填写公司/律所名称')
+      return
+    }
     saveProfileMutation.mutate()
   }
 
@@ -294,13 +296,13 @@ export default function SettingsPage() {
                   <label className="form-label">公司/律所</label>
                   <div style={{ position: 'relative' }}>
                     <Building2 size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                    <input className="form-input" value={org?.name ?? ''} disabled style={{ paddingLeft: 38, opacity: 0.75 }} />
+                    <input className="form-input" value={firmName} onChange={e => setFirmName(e.target.value)} style={{ paddingLeft: 38 }} />
                   </div>
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 4 }}>
-                    该信息来自注册时填写的组织名称
+                    仅用于页面展示，不参与权限、共享或业务流程
                   </span>
                 </div>
-                <button className="btn btn-primary" style={{ alignSelf: 'flex-start', marginTop: 8 }} onClick={handleSave} disabled={!name.trim() || saveProfileMutation.isPending}>
+                <button className="btn btn-primary" style={{ alignSelf: 'flex-start', marginTop: 8 }} onClick={handleSave} disabled={!name.trim() || !firmName.trim() || saveProfileMutation.isPending}>
                   {saveProfileMutation.isPending ? <span className="spinner" /> : <Save size={14} />}
                   {t('save')}
                 </button>

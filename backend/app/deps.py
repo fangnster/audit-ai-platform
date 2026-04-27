@@ -31,6 +31,14 @@ async def get_current_user(
     return user
 
 
+async def require_system_admin(
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> User:
+    if not current_user.is_system_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="System admin required")
+    return current_user
+
+
 async def get_current_org_member(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -85,4 +93,5 @@ def require_role(*roles: MemberRole):
 
 # Convenience type aliases
 CurrentUser = Annotated[User, Depends(get_current_user)]
+SystemAdminUser = Annotated[User, Depends(require_system_admin)]
 DB = Annotated[AsyncSession, Depends(get_db)]

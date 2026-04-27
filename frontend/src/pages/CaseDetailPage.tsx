@@ -2,7 +2,7 @@ import { useParams, Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import toast from 'react-hot-toast'
-import { FileText, BookOpen, CheckSquare, Files } from 'lucide-react'
+import { Activity, FileText, BookOpen, CheckSquare, Files } from 'lucide-react'
 import { casesApi } from '../api'
 import { formatLocalDateTime } from '../utils/time'
 
@@ -10,7 +10,8 @@ const MODULE_LINKS = [
   { path: 'documents', icon: Files,      labelKey: 'documentUpload', descZh: '上传证据材料和案件文件', descEn: 'Upload evidence and case files' },
   { path: 'facts',     icon: BookOpen,   labelKey: 'facts', descZh: '查看 AI 提取的事实并确认', descEn: 'Review and approve extracted facts' },
   { path: 'drafts',    icon: FileText,   labelKey: 'drafts', descZh: '生成自定义法律文案', descEn: 'Generate custom legal drafts' },
-  { path: 'tasks',     icon: CheckSquare,labelKey: 'taskCenter', descZh: '案件待办事项与补材料请求', descEn: 'Case tasks and evidence requests' },
+  { path: 'tasks',     icon: CheckSquare,labelKey: 'caseTasks', descZh: '案件待办事项与补材料请求', descEn: 'Case tasks and evidence requests' },
+  { path: 'agent-runs', icon: Activity,  labelKey: 'agentRuns', descZh: '查看当前案件的 AI 后台任务状态', descEn: 'Review AI background jobs for this case' },
 ]
 
 export default function CaseDetailPage() {

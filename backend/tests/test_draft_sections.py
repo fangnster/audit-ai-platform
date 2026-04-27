@@ -42,10 +42,12 @@ class FakeLLM:
     def __init__(self):
         self.prompt = ""
         self.system = ""
+        self.max_tokens = 0
 
     async def generate(self, prompt, system="", temperature=0.3, max_tokens=4096):
         self.prompt = prompt
         self.system = system
+        self.max_tokens = max_tokens
         return """# EB-1A Petition Letter for Dr. Lin
 
 ## Awards and Original Contributions
@@ -255,6 +257,45 @@ async def test_generate_draft_prompt_prioritizes_lawyer_custom_format():
     assert "RELEVANT LEGAL CRITERIA" not in llm.prompt
     assert "petition letter" not in llm.prompt.lower()
     assert "petition letter" not in llm.system.lower()
+
+
+@pytest.mark.asyncio
+async def test_generate_draft_compacts_large_inputs_for_remote_llm():
+    facts = [
+        {
+            "id": f"fact-{idx}",
+            "category": "evidence",
+            "content": "Long fact content " + ("x" * 2000),
+            "source_document_id": f"doc-{idx}",
+            "structured_data": {"document_name": f"doc-{idx}.pdf", "quote": "quote " + ("y" * 1200)},
+            "confidence_score": 0.9,
+        }
+        for idx in range(40)
+    ]
+    knowledge_refs = [
+        {
+            "title": f"Template {idx}",
+            "type": "document_template",
+            "content": "Knowledge content " + ("z" * 3000),
+        }
+        for idx in range(8)
+    ]
+
+    llm = FakeLLM()
+    await DraftGenerationAgent(llm=llm).generate_draft(
+        facts=facts,
+        case_type="EB1A",
+        draft_title="客户背景摘要",
+        user_prompt="请生成中文摘要，不要写申请信。",
+        knowledge_refs=knowledge_refs,
+    )
+
+    assert llm.max_tokens <= 1800
+    assert "fact-24" not in llm.prompt
+    assert "Template 4" not in llm.prompt
+    assert "x" * 1000 not in llm.prompt
+    assert "y" * 400 not in llm.prompt
+    assert "z" * 1500 not in llm.prompt
 
 
 def test_draft_attachment_header_supports_chinese_filename():

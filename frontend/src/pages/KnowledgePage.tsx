@@ -54,7 +54,7 @@ export default function KnowledgePage() {
   const normalizedSearch = viewMode === 'active' ? searchTerm.trim().toLowerCase() : ''
   const filteredItems = normalizedSearch
     ? rawItems.filter(item => {
-      const text = `${item.title} ${item.content} ${(item.tags || []).join(' ')}`.toLowerCase()
+      const text = `${item.title} ${(item.tags || []).join(' ')}`.toLowerCase()
       return text.includes(normalizedSearch)
     })
     : rawItems

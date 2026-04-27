@@ -9,10 +9,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.config import settings
 from app.middleware.auth import verify_password, hash_password, create_access_token, create_refresh_token
 from app.models.user import User
-from app.models.organization import Organization, OrgMember, MemberRole
 from app.deps import CurrentUser
+from app.services.cache import delete_pattern
+from app.services.todo_org import get_or_create_todo_org
 
 router = APIRouter()
 
@@ -22,12 +24,11 @@ class RegisterRequest(BaseModel):
     name: str
     password: str = Field(min_length=8)
     password_confirm: str = Field(min_length=8)
-    org_name: str
+    firm_name: Optional[str] = None
+    org_name: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_registration(self):
-        if not self.org_name.strip():
-            raise ValueError("请填写律所/公司名称")
         if self.password != self.password_confirm:
             raise ValueError("两次输入的密码不一致")
         return self
@@ -43,6 +44,8 @@ class UserResponse(BaseModel):
     id: uuid.UUID
     email: str
     name: str
+    firm_name: Optional[str] = None
+    is_system_admin: bool = False
     profile: dict
 
     model_config = {"from_attributes": True}
@@ -50,6 +53,7 @@ class UserResponse(BaseModel):
 
 class UpdateMeRequest(BaseModel):
     name: Optional[str] = None
+    firm_name: Optional[str] = None
     phone: Optional[str] = None
 
 
@@ -65,6 +69,18 @@ class ChangePasswordRequest(BaseModel):
         return self
 
 
+def _configured_admin_emails() -> set[str]:
+    return {
+        email.strip().lower()
+        for email in (settings.SYSTEM_ADMIN_EMAILS or "").replace(";", ",").split(",")
+        if email.strip()
+    }
+
+
+def _should_be_system_admin(email: str) -> bool:
+    return email.strip().lower() in _configured_admin_emails()
+
+
 @router.post("/register", response_model=UserResponse, status_code=201)
 async def register(body: RegisterRequest, db: Annotated[AsyncSession, Depends(get_db)]):
     result = await db.execute(select(User).where(User.email == body.email))
@@ -74,25 +90,20 @@ async def register(body: RegisterRequest, db: Annotated[AsyncSession, Depends(ge
     user = User(
         email=body.email,
         name=body.name,
+        firm_name=(body.firm_name or body.org_name or "").strip(),
         password_hash=hash_password(body.password),
+        is_system_admin=_should_be_system_admin(body.email),
         profile={},
     )
     db.add(user)
     await db.flush()
 
-    # Auto-create organization for the user
-    org_name = body.org_name.strip()
-    slug = org_name.lower().replace(" ", "-").replace("　", "-")[:50] + f"-{uuid.uuid4().hex[:6]}"
-    org = Organization(name=org_name, slug=slug)
-    db.add(org)
-    await db.flush()
-
-    # Add user as firm admin
-    org_member = OrgMember(org_id=org.id, user_id=user.id, role=MemberRole.firm_admin)
-    db.add(org_member)
+    # TODO(org): keep a per-user compatibility shell for legacy org_id FKs.
+    await get_or_create_todo_org(db, user)
 
     await db.commit()
     await db.refresh(user)
+    await delete_pattern("admin:v1:*")
     return user
 
 
@@ -103,8 +114,14 @@ async def login(
 ):
     result = await db.execute(select(User).where(User.email == form_data.username))
     user = result.scalar_one_or_none()
-    if not user or not verify_password(form_data.password, user.password_hash):
+    if not user or not user.is_active or not verify_password(form_data.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+
+    if _should_be_system_admin(user.email) and not user.is_system_admin:
+        user.is_system_admin = True
+        await db.commit()
+        await db.refresh(user)
+        await delete_pattern("admin:v1:*")
 
     access_token = create_access_token({"sub": str(user.id), "email": user.email})
     refresh_token = create_refresh_token(user.id)
@@ -142,6 +159,12 @@ async def update_me(
             raise HTTPException(status_code=422, detail="姓名不能为空")
         current_user.name = name
 
+    if body.firm_name is not None:
+        firm_name = body.firm_name.strip()
+        if not firm_name:
+            raise HTTPException(status_code=422, detail="公司/律所名称不能为空")
+        current_user.firm_name = firm_name
+
     if body.phone is not None:
         profile = dict(current_user.profile or {})
         profile["phone"] = body.phone.strip()
@@ -149,4 +172,5 @@ async def update_me(
 
     await db.commit()
     await db.refresh(current_user)
+    await delete_pattern("admin:v1:*")
     return current_user

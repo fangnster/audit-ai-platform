@@ -48,7 +48,7 @@ class LLMService:
     Unified LLM call interface.
 
     Priority for model/key selection:
-      explicit args  >  org-level settings  >  env config  >  defaults
+      explicit args  >  saved model settings  >  env config  >  defaults
     """
 
     def __init__(
@@ -65,7 +65,7 @@ class LLMService:
 
     @classmethod
     def from_org_settings(cls, org_settings: Optional[dict] = None) -> "LLMService":
-        """Create a service using organization-level model settings when present."""
+        """Compatibility alias for saved model settings."""
         org_settings = org_settings or {}
         return cls(
             provider=org_settings.get("llm_provider"),
@@ -210,11 +210,11 @@ class LLMService:
     # ------------------------------------------------------------------
     # Convenience methods used by agents
     # ------------------------------------------------------------------
-    async def extract_json(self, prompt: str, system: str = "") -> str:
+    async def extract_json(self, prompt: str, system: str = "", max_tokens: int = 2048) -> str:
         """Call LLM expecting JSON output. Strips reasoning tags automatically."""
         json_system = (system or "You are a data extraction assistant.") + \
                       "\nAlways respond with valid JSON only, no markdown fences, no explanations."
-        result = await self.generate(prompt, system=json_system, temperature=0.1)
+        result = await self.generate(prompt, system=json_system, temperature=0.0, max_tokens=max_tokens)
         return strip_think_tags(result)
 
     async def translate(
@@ -242,7 +242,14 @@ class LLMService:
             f"--- Content ---\n{content}\n--- End ---\n\n"
             f"Return ONLY the translated text, no explanations."
         )
-        return await self.generate(prompt, system=system, temperature=0.2, org_settings=org_settings)
+        max_tokens = min(4096, max(1024, len(content) + 512))
+        return await self.generate(
+            prompt,
+            system=system,
+            temperature=0.0,
+            max_tokens=max_tokens,
+            org_settings=org_settings,
+        )
 
 
 # Module-level singleton — use this in agents

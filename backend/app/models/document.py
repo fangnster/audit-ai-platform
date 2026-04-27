@@ -8,23 +8,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
 
-class DocType(str, PyEnum):
-    petition_letter = "petition_letter"
-    evidence = "evidence"
-    reference_letter = "reference_letter"
-    rfi_response = "rfi_response"
-    award = "award"
-    patent = "patent"
-    publication = "publication"
-    citation = "citation"
-    employment = "employment"
-    media = "media"
-    membership = "membership"
-    rfi = "rfi"
-    other = "other"
-    client_upload = "client_upload"
-
-
 class UploaderRole(str, PyEnum):
     lawyer = "lawyer"
     client = "client"
@@ -51,7 +34,7 @@ class Document(Base):
     category_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("document_categories.id", ondelete="SET NULL"), nullable=True)
     filename: Mapped[str] = mapped_column(String(500), nullable=False)
     original_filename: Mapped[str] = mapped_column(String(500), nullable=False)
-    doc_type: Mapped[DocType] = mapped_column(Enum(DocType, native_enum=False), nullable=False)
+    doc_type: Mapped[str] = mapped_column(String(100), nullable=False)
     storage_path: Mapped[str] = mapped_column(String(1000), nullable=False)   # org/{org_id}/case/{case_id}/{role}/{category}/{uuid_file}
     file_size: Mapped[int] = mapped_column(Integer, default=0, nullable=True)
     mime_type: Mapped[str] = mapped_column(String(200), default="application/octet-stream", nullable=True)

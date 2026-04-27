@@ -9,6 +9,7 @@ from app.database import Base
 
 
 class FactStatus(str, PyEnum):
+    candidate = "candidate"
     extracted = "extracted"
     lawyer_approved = "lawyer_approved"
     client_confirmed = "client_confirmed"

@@ -13,13 +13,107 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.deps import CurrentUser, DB, ensure_case_member
-from app.models.document import Document, DocType, UploaderRole, ParseStatus
+from app.models.document import Document, UploaderRole, ParseStatus
 from app.models.organization import DocumentCategory
 from app.config import settings
+from app.services.agent_tasks import release_stale_agent_tasks
 from app.services.cache import delete_pattern, get_json, set_json
 from app.utils.timezone import local_display, local_iso, local_now
 
 router = APIRouter()
+
+
+BUILTIN_DOCUMENT_TYPES = [
+    {"id": "evidence", "label": "证据材料", "icon": "📄", "enabled": True, "builtin": True},
+    {"id": "award", "label": "获奖证明", "icon": "🏆", "enabled": True, "builtin": True},
+    {"id": "original_contribution", "label": "原创成果", "icon": "✨", "enabled": True, "builtin": True},
+    {"id": "patent", "label": "专利", "icon": "💡", "enabled": True, "builtin": True},
+    {"id": "publication", "label": "学术发表", "icon": "📝", "enabled": True, "builtin": True},
+    {"id": "citation", "label": "引用数据", "icon": "📊", "enabled": True, "builtin": True},
+    {"id": "employment", "label": "雇佣证明", "icon": "💼", "enabled": True, "builtin": True},
+    {"id": "media", "label": "媒体报道", "icon": "📰", "enabled": True, "builtin": True},
+    {"id": "membership", "label": "专业组织", "icon": "🏛️", "enabled": True, "builtin": True},
+    {"id": "resume", "label": "个人简历", "icon": "👤", "enabled": True, "builtin": True},
+    {"id": "reference_letter", "label": "推荐信", "icon": "✉️", "enabled": True, "builtin": True},
+    {"id": "petition_letter", "label": "申请信", "icon": "📋", "enabled": True, "builtin": True},
+    {"id": "rfi", "label": "RFI 回复", "icon": "📮", "enabled": True, "builtin": True},
+    {"id": "other", "label": "其他", "icon": "📁", "enabled": True, "builtin": True},
+]
+BUILTIN_DOCUMENT_TYPE_IDS = {item["id"] for item in BUILTIN_DOCUMENT_TYPES}
+
+
+class DocumentTypeItem(BaseModel):
+    id: str
+    label: str
+    icon: str = "📄"
+    enabled: bool = True
+    builtin: bool = False
+
+
+class DocumentTypeSettingsRequest(BaseModel):
+    items: list[DocumentTypeItem]
+
+
+def _normalize_doc_type_id(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9_]+", "_", (value or "").strip().lower()).strip("_")
+    if not normalized:
+        raise HTTPException(400, "Document type id cannot be empty")
+    if len(normalized) > 60:
+        normalized = normalized[:60].rstrip("_")
+    return normalized
+
+
+def _normalize_doc_type_item(item: dict, *, builtin: bool = False) -> dict:
+    item_id = _normalize_doc_type_id(str(item.get("id") or ""))
+    label = str(item.get("label") or item_id).strip()[:40] or item_id
+    icon = str(item.get("icon") or "📄").strip()[:8] or "📄"
+    return {
+        "id": item_id,
+        "label": label,
+        "icon": icon,
+        "enabled": bool(item.get("enabled", True)),
+        "builtin": builtin or item_id in BUILTIN_DOCUMENT_TYPE_IDS,
+    }
+
+
+def _document_types_for_user(user) -> list[dict]:
+    defaults = {item["id"]: dict(item) for item in BUILTIN_DOCUMENT_TYPES}
+    profile = dict(getattr(user, "profile", None) or {})
+    stored = ((profile.get("document_type_settings") or {}).get("items") or [])
+    ordered_ids: list[str] = []
+
+    for raw in stored:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            normalized = _normalize_doc_type_item(raw)
+        except HTTPException:
+            continue
+        defaults[normalized["id"]] = normalized
+        ordered_ids.append(normalized["id"])
+
+    ordered: list[dict] = []
+    seen: set[str] = set()
+    for item_id in ordered_ids:
+        if item_id in defaults and item_id not in seen:
+            ordered.append(defaults[item_id])
+            seen.add(item_id)
+    for item in BUILTIN_DOCUMENT_TYPES:
+        if item["id"] not in seen:
+            ordered.append(defaults[item["id"]])
+            seen.add(item["id"])
+    for item_id, item in defaults.items():
+        if item_id not in seen:
+            ordered.append(item)
+    return ordered
+
+
+def _validate_document_type_for_user(doc_type: str, user) -> str:
+    normalized = _normalize_doc_type_id(doc_type)
+    allowed = {item["id"] for item in _document_types_for_user(user) if item.get("enabled")}
+    if normalized not in allowed:
+        raise HTTPException(400, "Invalid or disabled document type")
+    return normalized
 
 
 def build_storage_path(org_id, case_id, uploader_role: str, category_name: str, filename: str) -> str:
@@ -101,6 +195,7 @@ def read_document_bytes(doc: Document) -> bytes:
 
 async def _invalidate_document_cache(case_id: uuid.UUID) -> None:
     await delete_pattern(f"documents:{case_id}:*")
+    await delete_pattern("admin:v1:*")
 
 
 async def _get_document_for_user(doc_id: uuid.UUID, current_user, db: DB) -> Document:
@@ -144,35 +239,59 @@ class DocumentResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+@router.get("/types")
+async def list_document_types(current_user: CurrentUser):
+    return {"items": _document_types_for_user(current_user)}
+
+
+@router.patch("/types")
+async def update_document_types(body: DocumentTypeSettingsRequest, current_user: CurrentUser, db: DB):
+    if len(body.items) > 40:
+        raise HTTPException(400, "Too many document types")
+
+    normalized: list[dict] = []
+    seen: set[str] = set()
+    for item in body.items:
+        normalized_item = _normalize_doc_type_item(item.model_dump())
+        if normalized_item["id"] in seen:
+            continue
+        seen.add(normalized_item["id"])
+        normalized.append(normalized_item)
+
+    if not any(item["enabled"] for item in normalized):
+        raise HTTPException(400, "At least one document type must be enabled")
+
+    profile = dict(current_user.profile or {})
+    profile["document_type_settings"] = {"items": normalized}
+    current_user.profile = profile
+    await db.commit()
+    await db.refresh(current_user)
+    return {"items": _document_types_for_user(current_user)}
+
+
 @router.post("/cases/{case_id}/documents", status_code=201)
 async def upload_document(
     case_id: uuid.UUID,
     file: UploadFile = File(...),
-    doc_type: DocType = Form(...),
+    doc_type: str = Form(...),
     category_id: Optional[uuid.UUID] = Form(None),
     current_user: CurrentUser = ...,
     db: DB = ...,
 ):
     """
     Upload a document to the case.
-    Storage path: org/{org_id}/case/{case_id}/{role}/{category}/{file}
-    Automatically triggers AI fact extraction (async Celery task).
+    Storage path still contains the legacy org_id FK shell.
     """
-    from app.models.case import Case, CaseMember
-    from app.models.organization import OrgMember
+    from app.models.case import Case
 
-    # Get case + org
     case = await db.get(Case, case_id)
     if not case:
         raise HTTPException(404, "Case not found")
     await ensure_case_member(db, case_id, current_user.id)
 
-    # Determine uploader role
-    member_result = await db.execute(
-        select(OrgMember).where(OrgMember.user_id == current_user.id, OrgMember.org_id == case.org_id)
-    )
-    member = member_result.scalar_one_or_none()
-    uploader_role = UploaderRole.lawyer if member and member.role.value in ("firm_admin", "lead_lawyer", "associate") else UploaderRole.client
+    # TODO(org): do not infer business role from organization membership.
+    uploader_role = UploaderRole.lawyer
+    doc_type_value = _validate_document_type_for_user(doc_type, current_user)
 
     # Get category name for path
     category_name = "other"
@@ -193,7 +312,7 @@ async def upload_document(
         category_id=category_id,
         filename=f"{uuid.uuid4().hex[:8]}_{file.filename}",
         original_filename=file.filename or "upload",
-        doc_type=doc_type,
+        doc_type=doc_type_value,
         storage_path=storage_path,
         file_size=file_size,
         mime_type=file.content_type or "application/octet-stream",
@@ -212,8 +331,8 @@ async def upload_document(
     return {
         "id": str(doc.id),
         "filename": doc.original_filename,
-        "doc_type": doc.doc_type,
-        "uploader_role": doc.uploader_role,
+        "doc_type": str(doc.doc_type),
+        "uploader_role": str(doc.uploader_role.value if hasattr(doc.uploader_role, "value") else doc.uploader_role),
         "parse_status": parse_status,
         "storage_path": doc.storage_path,
         "category_id": str(doc.category_id) if doc.category_id else None,
@@ -250,7 +369,7 @@ async def list_documents(
 
     # Filter by doc_type (primary filter used by frontend)
     if doc_type:
-        query = query.where(Document.doc_type == doc_type)
+        query = query.where(Document.doc_type == _normalize_doc_type_id(doc_type))
     elif category:
         # Legacy: filter by DocumentCategory name
         cat_result = await db.execute(
@@ -267,11 +386,12 @@ async def list_documents(
         {
             "id": str(d.id),
             "filename": d.original_filename,
-            "doc_type": d.doc_type,
-            "uploader_role": d.uploader_role,
-            "parse_status": d.parse_status,
+            "doc_type": str(d.doc_type),
+            "uploader_role": str(d.uploader_role.value if hasattr(d.uploader_role, "value") else d.uploader_role),
+            "parse_status": str(d.parse_status.value if hasattr(d.parse_status, "value") else d.parse_status),
             "category_id": str(d.category_id) if d.category_id else None,
             "file_size": d.file_size,
+            "extracted_metadata": d.extracted_metadata or {},
             "created_at": local_iso(d.created_at),
             "updated_at": local_iso(d.updated_at or d.created_at),
             "is_deleted": d.is_deleted,
@@ -287,85 +407,113 @@ class ParseRequest(BaseModel):
 
 @router.post("/{doc_id}/parse")
 async def trigger_parse(doc_id: uuid.UUID, body: Optional[ParseRequest] = None, current_user: CurrentUser = ..., db: DB = ...):
-    """Manually trigger AI parsing on a document with optional prompt guidance."""
+    """Queue AI parsing on a document with optional prompt guidance."""
     doc = await _get_document_for_user(doc_id, current_user, db)
+    locked_doc_result = await db.execute(
+        select(Document)
+        .where(Document.id == doc.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    doc = locked_doc_result.scalar_one()
 
-    from app.models.fact import Fact, FactStatus
     from app.models.case import Case
     from app.models.organization import Organization
-    from app.agents.fact_extractor import FactExtractionAgent, strip_think_tags
-    from app.llm.provider import LLMService
+    from app.models.agent_task import AgentTask, AgentTaskStatus, AgentTaskType
+    from app.agents.fact_extractor import strip_think_tags
 
     prompt = strip_think_tags(body.prompt) if body and body.prompt else None
 
-    # Get case type
     case = await db.get(Case, doc.case_id)
     case_type = case.case_type.value if case and hasattr(case.case_type, 'value') else 'EB1A'
     doc_type_val = doc.doc_type.value if hasattr(doc.doc_type, 'value') else str(doc.doc_type)
     org = await db.get(Organization, case.org_id) if case else None
     org_settings = org.settings if org and org.settings else {}
+    await release_stale_agent_tasks(
+        db,
+        case_id=doc.case_id,
+        task_types=[AgentTaskType.fact_extract],
+        input_key="document_id",
+        input_value=str(doc.id),
+        commit=False,
+    )
+
+    running_result = await db.execute(
+        select(AgentTask)
+        .where(
+            AgentTask.case_id == doc.case_id,
+            AgentTask.task_type == AgentTaskType.fact_extract,
+            AgentTask.status.in_([AgentTaskStatus.queued, AgentTaskStatus.processing]),
+            AgentTask.input_params.op("->>")("document_id") == str(doc.id),
+        )
+        .order_by(AgentTask.created_at.desc())
+        .limit(1)
+    )
+    running_task = running_result.scalar_one_or_none()
+    if running_task:
+        return {
+            "doc_id": str(doc.id),
+            "agent_task_id": str(running_task.id),
+            "status": str(running_task.status.value if hasattr(running_task.status, "value") else running_task.status),
+            "message": "该文件已有解析任务在后台处理中，请稍候查看 Agent 运行记录。",
+        }
 
     doc.parse_status = ParseStatus.parsing
+    doc.extracted_metadata = {
+        **(doc.extracted_metadata or {}),
+        "mode": "llm_background_trigger",
+        "prompt": prompt,
+        "queued_at": local_iso(local_now()),
+    }
+    agent_task = AgentTask(
+        case_id=doc.case_id,
+        task_type=AgentTaskType.fact_extract,
+        input_params={
+            "case_id": str(doc.case_id),
+            "document_id": str(doc.id),
+            "document_name": doc.original_filename or doc.filename,
+            "doc_type": doc_type_val,
+            "case_type": case_type,
+            "prompt": prompt or "",
+            "prompt_chars": len(prompt or ""),
+            "mime_type": doc.mime_type or "",
+        },
+        status=AgentTaskStatus.queued,
+        priority=2,
+        llm_model=org_settings.get("llm_model") or settings.LLM_MODEL,
+    )
+    db.add(agent_task)
     await db.commit()
+    await db.refresh(agent_task)
     await _invalidate_document_cache(doc.case_id)
 
-    temp_path = ""
     try:
-        import tempfile
+        from app.workers.document_tasks import parse_document as celery_task
 
-        content = read_document_bytes(doc)
-        suffix = os.path.splitext(doc.original_filename or "")[1]
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            temp_path = tmp.name
-            tmp.write(content)
-
-        agent = FactExtractionAgent(llm=LLMService.from_org_settings(org_settings))
-        extracted = await agent.extract_facts(
-            file_path=temp_path,
-            mime_type=doc.mime_type or "",
-            doc_type=doc_type_val,
-            case_type=case_type,
-            lawyer_guidance=prompt or "",
+        celery_task.delay(
+            str(doc.id),
+            "",
+            doc.mime_type or "",
+            doc_type_val,
+            case_type,
+            str(doc.case_id),
+            prompt or "",
+            str(agent_task.id),
         )
-
-        inserted = 0
-        for f_data in extracted:
-            structured = dict(f_data.get("structured_data") or {})
-            structured.setdefault("document_name", doc.original_filename)
-            if prompt:
-                structured["parse_prompt"] = prompt
-            fact = Fact(
-                case_id=doc.case_id,
-                source_document_id=doc.id,
-                category=f_data.get("category", "other"),
-                content=f_data.get("content", ""),
-                structured_data=structured,
-                confidence_score=float(f_data.get("confidence_score", 1.0)),
-                status=FactStatus.extracted,
-            )
-            db.add(fact)
-            inserted += 1
-
-        doc.parse_status = ParseStatus.parsed
-        doc.extracted_metadata = {
-            "fact_count": inserted,
-            "mode": "llm_sync_trigger",
-            "prompt": prompt,
-            "parsed_at": local_iso(local_now()),
-        }
-        await db.commit()
-        await _invalidate_document_cache(doc.case_id)
-        await delete_pattern(f"facts:{doc.case_id}:*")
-        return {"doc_id": str(doc.id), "status": "parsed", "facts_extracted": inserted, "prompt_used": prompt}
     except Exception as e:
-        doc.parse_status = ParseStatus.failed
-        await db.commit()
-        await _invalidate_document_cache(doc.case_id)
-        await delete_pattern(f"facts:{doc.case_id}:*")
-        raise HTTPException(status_code=502, detail=f"Document parsing failed: {e}") from e
-    finally:
-        if temp_path and os.path.exists(temp_path):
-            os.unlink(temp_path)
+        return {
+            "doc_id": str(doc.id),
+            "agent_task_id": str(agent_task.id),
+            "status": "queued",
+            "message": f"解析任务已加入后台队列。Celery 暂未确认接收：{str(e)[:80]}",
+        }
+
+    return {
+        "doc_id": str(doc.id),
+        "agent_task_id": str(agent_task.id),
+        "status": "queued",
+        "message": "解析任务已在后台启动，可在 Agent 运行记录查看进度和结果。",
+    }
 
 
 # ── Download ────────────────────────────────
@@ -508,11 +656,13 @@ async def export_document_text(doc_id: uuid.UUID, export_format: str = "txt", cu
 
 @router.get("/categories")
 async def list_categories(org_id: Optional[uuid.UUID] = None, db: DB = ...):
-    """Get available document categories (system + org-specific)."""
+    """Get system document categories.
+
+    TODO(org): org-specific categories are intentionally ignored for now.
+    """
     from app.models.organization import DocumentCategory
     query = select(DocumentCategory).where(
-        (DocumentCategory.org_id == None) |  # system presets
-        (DocumentCategory.org_id == org_id if org_id else DocumentCategory.org_id == None)
+        DocumentCategory.org_id == None
     ).order_by(DocumentCategory.sort_order)
     result = await db.execute(query)
     cats = result.scalars().all()

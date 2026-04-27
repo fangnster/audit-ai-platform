@@ -112,28 +112,6 @@ CREATE TYPE public.casetype AS ENUM (
 
 
 --
--- Name: doctype; Type: TYPE; Schema: public; Owner: -
---
-
-CREATE TYPE public.doctype AS ENUM (
-    'evidence',
-    'award',
-    'patent',
-    'publication',
-    'citation',
-    'employment',
-    'media',
-    'membership',
-    'reference_letter',
-    'petition_letter',
-    'rfi',
-    'other',
-    'rfi_response',
-    'client_upload'
-);
-
-
---
 -- Name: factstatus; Type: TYPE; Schema: public; Owner: -
 --
 
@@ -343,7 +321,7 @@ CREATE TABLE public.documents (
     category_id uuid,
     filename character varying(500) NOT NULL,
     original_filename character varying(500) NOT NULL,
-    doc_type public.doctype NOT NULL,
+    doc_type character varying(100) NOT NULL,
     storage_path character varying(1000) NOT NULL,
     file_size integer DEFAULT 0,
     mime_type character varying(200) DEFAULT 'application/octet-stream'::character varying,
@@ -515,8 +493,10 @@ CREATE TABLE public.users (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     email character varying(255) NOT NULL,
     name character varying(255) NOT NULL,
+    firm_name character varying(255),
     password_hash character varying(255) NOT NULL,
     is_active boolean DEFAULT true,
+    is_system_admin boolean DEFAULT false NOT NULL,
     profile jsonb DEFAULT '{}'::jsonb,
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now()
@@ -698,6 +678,13 @@ CREATE INDEX idx_agent_tasks_case_updated ON public.agent_tasks USING btree (cas
 
 
 --
+-- Name: idx_agent_tasks_case_type_status_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_agent_tasks_case_type_status_created ON public.agent_tasks USING btree (case_id, task_type, status, created_at DESC);
+
+
+--
 -- Name: idx_case_members_case; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -733,10 +720,31 @@ CREATE INDEX idx_cases_lawyer ON public.cases USING btree (lead_lawyer_id, statu
 
 
 --
+-- Name: idx_cases_lead_lawyer; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_cases_lead_lawyer ON public.cases USING btree (lead_lawyer_id);
+
+
+--
+-- Name: idx_cases_lower_title; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_cases_lower_title ON public.cases USING btree (lower((title)::text));
+
+
+--
 -- Name: idx_cases_org; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_cases_org ON public.cases USING btree (org_id);
+
+
+--
+-- Name: idx_cases_updated_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_cases_updated_at ON public.cases USING btree (updated_at DESC);
 
 
 --
@@ -751,6 +759,13 @@ CREATE INDEX idx_client_tasks_case_deleted ON public.client_tasks USING btree (c
 --
 
 CREATE INDEX idx_client_tasks_case_deleted_updated ON public.client_tasks USING btree (case_id, is_deleted, updated_at DESC);
+
+
+--
+-- Name: idx_client_tasks_deleted_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_client_tasks_deleted_status ON public.client_tasks USING btree (is_deleted, status);
 
 
 --
@@ -852,6 +867,13 @@ CREATE INDEX idx_facts_case_deleted_updated ON public.facts USING btree (case_id
 
 
 --
+-- Name: idx_facts_case_deleted_confidence_updated; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_facts_case_deleted_confidence_updated ON public.facts USING btree (case_id, is_deleted, confidence_score DESC, updated_at DESC);
+
+
+--
 -- Name: idx_facts_case_status; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -877,6 +899,20 @@ CREATE INDEX idx_knowledge_deleted ON public.knowledge_items USING btree (is_del
 --
 
 CREATE INDEX idx_knowledge_items_org_deleted_type_updated ON public.knowledge_items USING btree (org_id, is_deleted, item_type, updated_at DESC);
+
+
+--
+-- Name: idx_knowledge_items_user_deleted_type_updated; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_knowledge_items_user_deleted_type_updated ON public.knowledge_items USING btree (user_id, is_deleted, item_type, updated_at DESC);
+
+
+--
+-- Name: idx_knowledge_items_user_deleted_updated; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_knowledge_items_user_deleted_updated ON public.knowledge_items USING btree (user_id, is_deleted, updated_at DESC);
 
 
 --
@@ -919,6 +955,48 @@ CREATE INDEX idx_teams_org ON public.teams USING btree (org_id);
 --
 
 CREATE INDEX idx_user_sessions_user ON public.user_sessions USING btree (user_id, case_id);
+
+
+--
+-- Name: idx_users_active_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_users_active_created ON public.users USING btree (is_active, created_at DESC);
+
+
+--
+-- Name: idx_users_admin_active; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_users_admin_active ON public.users USING btree (is_system_admin, is_active);
+
+
+--
+-- Name: idx_users_created_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_users_created_at ON public.users USING btree (created_at DESC);
+
+
+--
+-- Name: idx_users_lower_email; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_users_lower_email ON public.users USING btree (lower((email)::text));
+
+
+--
+-- Name: idx_users_lower_firm_name; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_users_lower_firm_name ON public.users USING btree (lower((firm_name)::text));
+
+
+--
+-- Name: idx_users_lower_name; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_users_lower_name ON public.users USING btree (lower((name)::text));
 
 
 --
