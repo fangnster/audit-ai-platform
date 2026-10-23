@@ -1,6 +1,8 @@
 # 远程部署文档：经济型上线方案
 
-更新时间：2026-04-27
+[English guide](implementation.en.md#production-operations) · [命名兼容与备份说明](naming_and_backup.md)
+
+更新时间：2026-10-23
 目标：把当前系统稳定放到公网访问，并能远程 CI/CD、备份、排障和回滚。
 
 详细运维 Runbook 见：`docs/remote_maintenance_runbook.md`。
@@ -22,7 +24,7 @@
 
 为什么先选单台 VPS：
 
-- 当前项目不是纯 Serverless。文案生成、AI 重写等依赖常驻 Worker 和 Redis。
+- 当前项目不是纯 Serverless。审计底稿生成、AI 重写等依赖常驻 Worker 和 Redis。
 - 单机 Compose 最容易保证 API、Worker、DB、Redis、存储之间网络稳定。
 - 成本固定，早期排障简单。
 
@@ -277,19 +279,19 @@ DRAFT_TASK_TIME_LIMIT_SECONDS=480
 
 当前保护策略：
 
-- 文件解析、事实重解析、文案生成和 AI 重写都会写入案件内「Agent 运行记录」。
-- 同一文件解析中、同一事实重解析中、同一案件文案生成中会阻止重复触发。
+- 文件解析、事实重解析、审计底稿生成和 AI 重写都会写入审计项目内「Agent 运行记录」。
+- 同一文件解析中、同一事实重解析中、同一审计项目审计底稿生成中会阻止重复触发。
 - 超过保护时间仍停留在 `queued/processing` 的任务会自动标记失败并释放按钮。
 - 旧 Worker 如果晚返回，会先检查任务状态，不会覆盖已经释放或重新发起后的结果。
 
 如果线上模型经常超时：
 
-- 优先减少律师单次选择的事实数量。
+- 优先减少审计人员单次选择的事实数量。
 - 知识库只选最相关 1-4 条。
-- 把“生成整封申请信”拆成“生成某个论证段落”。
+- 把“生成整封审计报告”拆成“生成某个论证段落”。
 - 文件解析先用较小文件测试。
 - Worker 并发不要盲目调高，小 VPS 建议 `--concurrency=2`。
-- 查看案件内「Agent 运行记录」、`agent_tasks.error_message` 和 worker 日志。
+- 查看审计项目内「Agent 运行记录」、`agent_tasks.error_message` 和 worker 日志。
 
 ## 9. 日常维护
 
@@ -420,7 +422,7 @@ docker compose -f docker-compose.prod.yml exec api alembic downgrade -1
 - 管理员能登录系统后台。
 - 模型设置页测试生成成功。
 - 上传小文件并触发后台解析成功。
-- 在案件内「Agent 运行记录」能看到文件解析记录、诊断信息和提取事实数。
-- 选择少量事实生成文案成功。
-- 文案生成和 AI 重写记录能展示可读的事实依据、策略名和知识库标题。
+- 在审计项目内「Agent 运行记录」能看到文件解析记录、诊断信息和提取事实数。
+- 选择少量事实生成报告成功。
+- 审计底稿生成和 AI 重写记录能展示可读的事实依据、策略名和知识库标题。
 - Worker 日志无持续错误。

@@ -56,7 +56,7 @@ export function useCaseWebSocket(caseId: string) {
             qc.invalidateQueries({ queryKey: ['agentTasks', caseId] })
           } else if (data.type === 'fact_fixed') {
             const name = factName(data.fact_id)
-            toast.success('事实更新，相关文案已同步刷新', notificationHistoryMeta({ category: 'fact', type_name: t('facts'), object_name: name, ...cachedCaseMeta() }))
+            toast.success('事实更新，相关审计底稿已同步刷新', notificationHistoryMeta({ category: 'fact', type_name: t('facts'), object_name: name, ...cachedCaseMeta() }))
             qc.invalidateQueries({ queryKey: ['drafts', caseId] })
           } else if (data.type === 'fact_reparsed') {
             const name = factName(data.fact_id)
@@ -64,7 +64,7 @@ export function useCaseWebSocket(caseId: string) {
             qc.invalidateQueries({ queryKey: ['facts', caseId] })
             qc.invalidateQueries({ queryKey: ['agentTasks', caseId] })
           } else if (data.type === 'rfi_generated') {
-            toast.success('RFI 补件回复已生成', notificationHistoryMeta({ category: 'agent_draft', type_name: t('agentTaskRfiGenerate'), object_name: cachedCaseTitle(), ...cachedCaseMeta() }))
+            toast.success('审计询证回复已生成', notificationHistoryMeta({ category: 'agent_draft', type_name: t('agentTaskRfiGenerate'), object_name: cachedCaseTitle(), ...cachedCaseMeta() }))
             qc.invalidateQueries({ queryKey: ['agentTasks', caseId] })
           }
         } catch (err) {

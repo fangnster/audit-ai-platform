@@ -28,21 +28,36 @@ import {
 type DocTypeOption = { id: string; label: string; icon?: string; enabled?: boolean; builtin?: boolean }
 
 const DEFAULT_DOC_TYPES: DocTypeOption[] = [
-  { id: 'evidence', label: '证据材料', icon: '📄', enabled: true, builtin: true },
-  { id: 'award', label: '获奖证明', icon: '🏆', enabled: true, builtin: true },
-  { id: 'original_contribution', label: '原创成果', icon: '✨', enabled: true, builtin: true },
-  { id: 'patent', label: '专利', icon: '💡', enabled: true, builtin: true },
-  { id: 'publication', label: '学术发表', icon: '📝', enabled: true, builtin: true },
-  { id: 'citation', label: '引用数据', icon: '📊', enabled: true, builtin: true },
-  { id: 'employment', label: '雇佣证明', icon: '💼', enabled: true, builtin: true },
-  { id: 'media', label: '媒体报道', icon: '📰', enabled: true, builtin: true },
-  { id: 'membership', label: '专业组织', icon: '🏛️', enabled: true, builtin: true },
-  { id: 'resume', label: '个人简历', icon: '👤', enabled: true, builtin: true },
-  { id: 'reference_letter', label: '推荐信', icon: '✉️', enabled: true, builtin: true },
-  { id: 'petition_letter', label: '申请信', icon: '📋', enabled: true, builtin: true },
-  { id: 'rfi', label: 'RFI 回复', icon: '📮', enabled: true, builtin: true },
+  { id: 'evidence', label: '审计证据', icon: '📄', enabled: true, builtin: true },
+  { id: 'award', label: '财务报表', icon: '🏆', enabled: true, builtin: true },
+  { id: 'original_contribution', label: '内部控制', icon: '✨', enabled: true, builtin: true },
+  { id: 'patent', label: '合同与协议', icon: '💡', enabled: true, builtin: true },
+  { id: 'publication', label: '会计记录', icon: '📝', enabled: true, builtin: true },
+  { id: 'citation', label: '交易明细', icon: '📊', enabled: true, builtin: true },
+  { id: 'employment', label: '薪酬与人事', icon: '💼', enabled: true, builtin: true },
+  { id: 'media', label: '外部资料', icon: '📰', enabled: true, builtin: true },
+  { id: 'membership', label: '政策与制度', icon: '🏛️', enabled: true, builtin: true },
+  { id: 'resume', label: '业务流程', icon: '👤', enabled: true, builtin: true },
+  { id: 'reference_letter', label: '函证与声明', icon: '✉️', enabled: true, builtin: true },
+  { id: 'petition_letter', label: '审计报告', icon: '📋', enabled: true, builtin: true },
+  { id: 'rfi', label: '审计询证回复', icon: '📮', enabled: true, builtin: true },
   { id: 'other', label: '其他', icon: '📁', enabled: true, builtin: true },
 ]
+const LEGACY_DOC_TYPE_LABELS: Record<string, string> = {
+  evidence: '证据材料',
+  award: '获奖证明',
+  original_contribution: '原创成果',
+  patent: '专利',
+  publication: '学术发表',
+  citation: '引用数据',
+  employment: '雇佣证明',
+  media: '媒体报道',
+  membership: '专业组织',
+  resume: '个人简历',
+  reference_letter: '推荐信',
+  petition_letter: '申请信',
+  rfi: 'RFI 回复',
+}
 const DOC_TYPE_META: Record<string, { icon: string; labelKey: string }> = {
   evidence: { icon: '📄', labelKey: 'docTypeEvidence' },
   award: { icon: '🏆', labelKey: 'docTypeAward' },
@@ -120,7 +135,9 @@ export default function DocumentsPage() {
     if (!Array.isArray(items) || items.length === 0) return DEFAULT_DOC_TYPES
     return items.map((item: any) => ({
       id: String(item.id),
-      label: String(item.label || item.id),
+      label: item.builtin === true && LEGACY_DOC_TYPE_LABELS[String(item.id)] === item.label
+        ? DEFAULT_DOC_TYPES.find(option => option.id === String(item.id))?.label || String(item.label)
+        : String(item.label || item.id),
       icon: String(item.icon || '📄'),
       enabled: item.enabled !== false,
       builtin: item.builtin === true,

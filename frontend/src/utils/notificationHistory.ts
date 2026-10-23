@@ -54,8 +54,8 @@ export const NOTIFICATION_CATEGORIES: Array<{
     key: 'task_submission',
     labelZh: '后台任务提交',
     labelEn: 'Background task submission',
-    descriptionZh: '解析、重解析、文案生成等任务已进入后台队列的提交提示；不是最终成功或失败结果',
-    descriptionEn: 'Queued-task messages for parsing, reparsing, and draft generation; not final success or failure results',
+    descriptionZh: '解析、重解析、审计底稿生成等任务已进入后台队列的提交提示；不是最终成功或失败结果',
+    descriptionEn: 'Queued-task messages for parsing, reparsing, and audit draft generation; not final success or failure results',
   },
   {
     key: 'agent_document',
@@ -73,17 +73,17 @@ export const NOTIFICATION_CATEGORIES: Array<{
   },
   {
     key: 'agent_draft',
-    labelZh: '文案生成 / AI 重写结果',
-    labelEn: 'Draft generation / AI rewrite results',
-    descriptionZh: '文案生成、AI 重写、RFI 生成的成功和失败结果，以及重复任务、启动失败等相关提示',
-    descriptionEn: 'Success and failure results for draft generation, AI rewrite, and RFI generation, plus related duplicate-task and startup failure notices',
+    labelZh: '审计底稿生成 / AI 重写结果',
+    labelEn: 'Audit draft generation / AI rewrite results',
+    descriptionZh: '审计底稿生成、AI 重写、审计询证回复生成的成功和失败结果，以及重复任务、启动失败等相关提示',
+    descriptionEn: 'Success and failure results for audit draft generation, AI rewrite, and audit inquiry response generation, plus related duplicate-task and startup failure notices',
   },
   {
     key: 'translation',
     labelZh: '翻译',
     labelEn: 'Translation',
-    descriptionZh: '事实和文案的中英文翻译结果',
-    descriptionEn: 'Chinese/English translation results for facts and drafts',
+    descriptionZh: '事实和审计底稿的中英文翻译结果',
+    descriptionEn: 'Chinese/English translation results for facts and audit drafts',
   },
   {
     key: 'document',
@@ -101,17 +101,17 @@ export const NOTIFICATION_CATEGORIES: Array<{
   },
   {
     key: 'draft',
-    labelZh: '文案操作',
-    labelEn: 'Draft actions',
-    descriptionZh: '文案编辑、保存、导出、删除、恢复',
-    descriptionEn: 'Edit, save, export, delete, and restore draft sections',
+    labelZh: '审计底稿操作',
+    labelEn: 'Audit draft actions',
+    descriptionZh: '审计底稿编辑、保存、导出、删除、恢复',
+    descriptionEn: 'Edit, save, export, delete, and restore audit draft sections',
   },
   {
     key: 'case_task',
-    labelZh: '案件和任务',
-    labelEn: 'Cases and tasks',
-    descriptionZh: '案件创建、案件状态、律师任务流转',
-    descriptionEn: 'Case creation, case status, and lawyer task workflow',
+    labelZh: '审计项目和任务',
+    labelEn: 'Audit engagements and tasks',
+    descriptionZh: '审计项目创建、审计项目状态、审计师任务流转',
+    descriptionEn: 'Audit engagement creation, status, and auditor task workflow',
   },
   {
     key: 'knowledge',
@@ -251,7 +251,7 @@ function inferCategoryFromSnapshot(path: string, message: string): NotificationC
   if (/翻译|translate|translation/.test(text)) return 'translation'
   if (/解析|parse/.test(text) && (/\/documents/.test(normalizedPath) || /文件|document/.test(text))) return 'agent_document'
   if (/重解析|异议|reparse|dispute/.test(text) && (/\/facts/.test(normalizedPath) || /事实|fact/.test(text))) return 'agent_fact'
-  if (/文案生成|ai\s*重写|重写|draft generation|rewrite|rfi/.test(text)) return 'agent_draft'
+  if (/文案生成|审计底稿生成|ai\s*重写|重写|draft generation|audit draft generation|rewrite|rfi/.test(text)) return 'agent_draft'
 
   if (/\/documents/.test(normalizedPath)) return 'document'
   if (/\/facts/.test(normalizedPath)) return 'fact'

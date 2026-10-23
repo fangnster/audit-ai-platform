@@ -461,7 +461,7 @@ async def upload_evidence(
     source_type: str = Form("legal_document"),
 ):
     """
-    Upload a legal document or internet evidence file.
+    Upload an audit reference document or internet evidence file.
     AI parses the file and extracts facts with source annotations.
     In production, this would use an LLM to parse the document.
     For dev, generates simulated extracted facts.
@@ -476,13 +476,13 @@ async def upload_evidence(
     # Simulated AI extraction results
     simulated_facts = [
         {
-            "content": f"从文档 '{filename}' 中提取：该文件包含与案件相关的关键证据材料，"
-                       f"支持申请人在专业领域的杰出贡献论证。",
+            "content": f"文档 '{filename}' 的演示占位记录：请核验审计证据来源、会计期间和相关业务，"
+                       f"此记录不是已完成的事实提取结果。",
             "confidence_score": 0.85,
         },
         {
-            "content": f"从文档 '{filename}' 中提取：文件中的数据和引用进一步证实了"
-                       f"申请人的工作在行业内具有原创性和重要影响力。",
+            "content": f"文档 '{filename}' 的演示复核提示：请核对金额、凭证编号和控制执行证据，"
+                       f"人工确认前不得作为审计结论依据。",
             "confidence_score": 0.78,
         },
     ]
@@ -494,7 +494,7 @@ async def upload_evidence(
             category=category,
             content=item["content"],
             structured_data={
-                "source": "法律文书" if source_type == "legal_document" else "互联网证据",
+                "source": "审计参考文档" if source_type == "legal_document" else "互联网证据",
                 "document_name": filename,
                 "source_type": source_type,
                 "type": "uploaded_evidence",

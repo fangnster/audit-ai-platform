@@ -4,16 +4,16 @@ const ACTION_ZH: Record<LlmAction, string> = {
   test: '测试生成',
   parse: '文件解析',
   translate: '翻译',
-  generate: '文案生成',
-  rewrite: '文案重写',
+  generate: '审计底稿生成',
+  rewrite: '审计底稿重写',
 }
 
 const ACTION_EN: Record<LlmAction, string> = {
   test: 'Generation test',
   parse: 'Document parsing',
   translate: 'Translation',
-  generate: 'Draft generation',
-  rewrite: 'Draft rewrite',
+  generate: 'Audit draft generation',
+  rewrite: 'Audit draft rewrite',
 }
 
 function detailToText(error: any) {

@@ -1,3 +1,4 @@
+import { auditFactCategoryLabel } from '../utils/auditLabels'
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
@@ -902,7 +903,7 @@ export default function DraftsPage() {
                     }}>
                       <input type="checkbox" checked={selectedFactIds.includes(f.id)}
                         onChange={() => toggleFact(f.id)} style={{ accentColor: 'var(--accent-primary)', marginTop: 2 }} />
-                      <span className="badge badge-gray" style={{ fontSize: '0.68rem', flexShrink: 0 }}>{f.category}</span>
+                      <span className="badge badge-gray" style={{ fontSize: '0.68rem', flexShrink: 0 }}>{auditFactCategoryLabel(f.category, i18n.language)}</span>
                       <span className={`badge ${f.status === 'lawyer_approved' ? 'badge-green' : 'badge-gray'}`} style={{ fontSize: '0.68rem', flexShrink: 0 }}>
                         {f.status === 'lawyer_approved' ? t('confirmed') : f.status === 'candidate' ? t('candidateFact') : t('awaitingClient')}
                       </span>
@@ -1039,7 +1040,7 @@ export default function DraftsPage() {
                       <input type="checkbox" checked={rewriteFactIds.includes(f.id)}
                         onChange={() => setRewriteFactIds(prev => prev.includes(f.id) ? prev.filter(x => x !== f.id) : [...prev, f.id])}
                         style={{ accentColor: 'var(--accent-primary)', marginTop: 2 }} />
-                      <span className="badge badge-gray" style={{ fontSize: '0.68rem', flexShrink: 0 }}>{f.category}</span>
+                      <span className="badge badge-gray" style={{ fontSize: '0.68rem', flexShrink: 0 }}>{auditFactCategoryLabel(f.category, i18n.language)}</span>
                       <span className={`badge ${f.status === 'lawyer_approved' ? 'badge-green' : 'badge-gray'}`} style={{ fontSize: '0.68rem', flexShrink: 0 }}>
                         {f.status === 'lawyer_approved' ? t('confirmed') : f.status === 'candidate' ? t('candidateFact') : t('awaitingClient')}
                       </span>
@@ -1115,7 +1116,7 @@ export default function DraftsPage() {
         <ConfirmActionModal
           action={confirmAction.kind}
           itemName={confirmAction.name}
-          itemType="文案"
+          itemType="审计底稿"
           isPending={confirmPending}
           onCancel={() => setConfirmAction(null)}
           onConfirm={confirmDraftAction}

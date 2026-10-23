@@ -1,3 +1,5 @@
+import { useTranslation } from 'react-i18next'
+import { auditTypeLabel } from '../utils/auditLabels'
 import { Toaster, ToastBar, resolveValue, type Toast } from 'react-hot-toast'
 import type { NotificationHistoryMeta } from '../utils/notificationHistory'
 
@@ -10,16 +12,17 @@ const shortText = (value: string, maxLength = 80) => {
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text
 }
 
-function caseContext(meta?: NotificationHistoryMeta) {
+function caseContext(language: string, meta?: NotificationHistoryMeta) {
   const caseTitle = meta?.case_title?.trim()
   const caseType = meta?.case_type?.trim()
   return [
     caseTitle ? shortText(caseTitle) : '',
-    caseType || '',
+    auditTypeLabel(caseType || '', language),
   ].filter(Boolean)
 }
 
 export function AppToaster() {
+  const { i18n } = useTranslation()
   return (
     <Toaster
       position="top-right"
@@ -34,7 +37,7 @@ export function AppToaster() {
     >
       {(toast) => {
         const meta = (toast as ToastWithHistoryMeta).historyMeta
-        const context = caseContext(meta)
+        const context = caseContext(i18n.language, meta)
         return (
           <ToastBar
             toast={toast}

@@ -1,22 +1,28 @@
-# AI Agent 移民律师协作平台
+# AI Agent 审计协作平台
 
-> 多租户 SaaS 平台，基于 AI Agent 辅助移民律师完成 EB-1A 等签证文案的撰写。
+[English](README.en.md) · [公开 GitHub 仓库](https://github.com/fangnster/audit-ai-platform) · [命名兼容与本地备份 / Naming and backup](docs/naming_and_backup.md)
+
+> AuditAI：AI Agent 审计工作台，沿用“项目 → 证据 → 事实 → 报告 → 复核”的现有流程，辅助整理审计证据和起草审计报告。
+
+本次调整以名称、界面文案和审计提示词为主，保留原有程序结构、接口、数据库和工作流。AI 生成的是供人工复核的底稿或报告草稿，不自动签发审计意见或证明合规。
+
+修改文档之前，原始程序已提交为 `0aaa122a7f25f887e32acc47905e188bbdf57fca`，并保存本地标签 `backup/pre-audit-20261023`、Git bundle 和源码归档。备份留在本机，恢复说明见[双语备份文档](docs/naming_and_backup.md)。
 
 ---
 
 ## 当前功能范围
 
-- 律师注册时登记律所/公司，个人信息可维护联系电话和公司/律所名称；公司/律所当前只作为用户资料展示和编辑，不参与业务权限。
-- 案件支持状态流转、客户姓名/邮箱/电话维护、搜索、排序、分页、软删除、恢复和后台管理；客户邮箱或电话至少填写一个。
-- 文档上传后由律师手动触发后台解析，支持内置和自定义文件类型，包括原创成果；解析弹窗支持知识库检索和提示词模板；同一文件解析中会阻止重复触发。
+- 审计人员注册时登记审计机构/公司，个人信息可维护联系电话和公司/审计机构名称；公司/审计机构当前只作为用户资料展示和编辑，不参与业务权限。
+- 审计项目支持状态流转、客户姓名/邮箱/电话维护、搜索、排序、分页、软删除、恢复和后台管理；客户邮箱或电话至少填写一个。
+- 文档上传后由审计人员手动触发后台解析，支持内置和自定义文件类型，包括内部控制；解析弹窗支持知识库检索和提示词模板；同一文件解析中会阻止重复触发。
 - 一篇文档可抽取多条事实；事实可确认、编辑、翻译、删除、提出异议并基于异议后台重解析；同一事实重解析中会阻止重复触发。
-- 知识库只按当前律师本人筛选，检索仅依靠标题和标签；解析/重解析只使用提示词模板和 Agent 策略，文案生成/AI 重写可使用全部知识库类型。
-- Agent 文案生成支持跨事实、跨知识库材料组织内容，并统一清理模型输出中的 `<think>` 标签；远端请求已加入输入预算、缓存、任务去重、超时释放和失败记录等保护。
-- 案件内提供独立「Agent 运行记录」，按文件解析和重解析、事实重解析、文案生成和 AI 重写分类展示输入、结果、诊断、错误和可读上下文。
-- 顶部告警栏支持成功/失败历史查询；设置页可按类别分别控制弹出和历史记录，历史名称优先显示原始文件名、事实内容、文案标题等可追踪源对象。
-- 任务中心支持跨案件待办；案件内「案件任务」支持新建、状态变更、标记完成、删除和恢复。
-- 系统后台支持概览、用户/案件搜索分页排序、用户启停、管理员授权、重置密码、删除用户和案件。
-- 前端支持明亮版与经典暗色版两套主题，律师可在设置中自行选择。
+- 知识库只按当前审计人员本人筛选，检索仅依靠标题和标签；解析/重解析只使用提示词模板和 Agent 策略，审计底稿生成/AI 重写可使用全部知识库类型。
+- Agent 审计底稿生成支持跨事实、跨知识库材料组织内容，并统一清理模型输出中的 `<think>` 标签；远端请求已加入输入预算、缓存、任务去重、超时释放和失败记录等保护。
+- 审计项目内提供独立「Agent 运行记录」，按文件解析和重解析、事实重解析、审计底稿生成和 AI 重写分类展示输入、结果、诊断、错误和可读上下文。
+- 顶部告警栏支持成功/失败历史查询；设置页可按类别分别控制弹出和历史记录，历史名称优先显示原始文件名、事实内容、底稿标题等可追踪源对象。
+- 任务中心支持跨审计项目待办；审计项目内「审计项目任务」支持新建、状态变更、标记完成、删除和恢复。
+- 系统后台支持概览、用户/审计项目搜索分页排序、用户启停、管理员授权、重置密码、删除用户和审计项目。
+- 前端支持明亮版与经典暗色版两套主题，审计人员可在设置中自行选择。
 
 ---
 
@@ -36,13 +42,18 @@
 
 ## 文档索引
 
-- [AI Agent 移民律师协作平台 V1.2 需求说明书](AI%20Agent%20移民律师协作平台%20V1.md)
+- [AI Agent 审计协作平台 V1.2 需求说明书](AI%20Agent%20审计协作平台%20V1.md)
 - [产品需求文档：当前实现版](docs/product_requirements.md)
 - [技术实现文档](docs/implementation.md)
-- [律师操作手册](docs/lawyer_user_manual.md)
+- [审计操作手册](docs/audit_user_manual.md)
+- [English audit user guide](docs/audit_user_manual.en.md)
+- [English implementation and operations guide](docs/implementation.en.md)
+- [审计命名兼容与本地备份（中英双语）](docs/naming_and_backup.md)
 - [本地部署文档](docs/deployment_local_economical.md)
 - [远程部署文档](docs/deployment_remote_economical.md)
 - [远程维护与 CI/CD 运维档案](docs/remote_maintenance_runbook.md)
+
+公开文档保存在 GitHub 的 `docs/` 目录；`frontend/public/docs/` 保存应用 `/docs/` 入口的镜像。`case_type`、`lawyer_approved`、`immigration_db`、`immigration-docs` 等技术标识继续兼容原有数据，界面显示为审计名称。完整映射见[命名说明](docs/naming_and_backup.md)。
 
 ---
 
@@ -63,8 +74,8 @@
 ### 第一步：克隆项目
 
 ```bash
-git clone <your-repo-url>
-cd imigrationAplication
+git clone https://github.com/fangnster/audit-ai-platform.git
+cd audit-ai-platform
 ```
 
 ### 第二步：配置环境变量
@@ -102,7 +113,7 @@ docker compose up -d
 docker compose exec api alembic upgrade head
 ```
 
-这将创建所有数据库表并插入系统预设文件分类（奖项、专利、论文等）。
+这将创建所有数据库表并插入系统预设文件分类；界面显示审计证据、财务报表、内部控制等审计名称，底层分类键继续兼容原数据。
 
 ### 第五步：验证服务状态
 
@@ -129,7 +140,7 @@ frontend    running   (port 5173)
 | **API 文档（Swagger）** | http://localhost:8000/api/docs | 交互式 API 文档 |
 | **API 文档（Redoc）** | http://localhost:8000/api/redoc | 阅读友好版 |
 | **前端界面** | http://localhost:5173 | React 应用 |
-| **MinIO 控制台** | http://localhost:9001 | 文件存储管理（admin/minioadmin123） |
+| **MinIO 控制台** | http://localhost:9001 | 文件存储管理（minioadmin/minioadmin123；仅本地开发默认值） |
 | **健康检查** | http://localhost:8000/health | 服务状态 |
 | **就绪检查** | http://localhost:8000/health/ready | 数据库/Redis 状态 |
 
@@ -253,7 +264,7 @@ npm ci
 npm run build
 ```
 
-上线前至少做一轮冒烟测试：管理员登录、创建案件、上传小文件并后台解析、在 Agent 运行记录查看解析结果、确认事实、选择少量事实生成文案、查看 Worker 日志无持续错误。
+上线前至少做一轮冒烟测试：管理员登录、创建审计项目、上传小文件并后台解析、在 Agent 运行记录查看解析结果、确认事实、选择少量事实生成报告、查看 Worker 日志无持续错误。
 
 ---
 
@@ -286,10 +297,10 @@ docker compose down -v
 
 - API 请求日志包含 `request_id`、路径、状态码和耗时。
 - Agent Worker 日志包含任务开始、完成、失败和重试；失败原因会写入 `agent_tasks.error_message`。
-- 文件解析、事实重解析、文案生成和 AI 重写都会写入案件内「Agent 运行记录」。记录中展示文件名、事实名、策略名、知识库标题等可读上下文，而不是只展示机器 ID。
+- 文件解析、事实重解析、审计底稿生成和 AI 重写都会写入审计项目内「Agent 运行记录」。记录中展示文件名、事实名、策略名、知识库标题等可读上下文，而不是只展示机器 ID。
 - 系统会自动释放超过保护时间仍停留在 `queued/processing` 的 Agent 任务，释放后按钮可重新触发，旧 Worker 返回时不会覆盖新结果。
 - Redis 用于队列、列表缓存和 LLM 短 TTL 缓存；Redis 异常时页面缓存会降级，但 Celery 队列会受影响。
-- 文档、事实、任务、文案、案件和会话接口会按案件成员校验权限，避免跨案件读写。
+- 文档、事实、任务、报告、审计项目和会话接口会按审计项目成员校验权限，避免跨审计项目读写。
 
 ---
 
@@ -299,7 +310,7 @@ docker compose down -v
 
 - 远程部署：单台 VPS 或便宜托管云服务组合，见 [远程部署方案](docs/deployment_remote_economical.md)。
 - 本地部署：办公室电脑/内网服务器 + Docker Compose，并配置大模型调用，见 [本地部署方案](docs/deployment_local_economical.md)。
-- 律师使用说明：见 [律师操作手册](docs/lawyer_user_manual.md)。
+- 审计人员使用说明：见 [审计操作手册](docs/audit_user_manual.md)。
 
 生产远程部署使用 `docker-compose.prod.yml` 和 `deploy/Caddyfile.prod`；开发和本机快速试用继续使用 `docker-compose.yml`。
 
@@ -308,7 +319,7 @@ docker compose down -v
 ## 目录结构
 
 ```
-imigrationAplication/
+audit-ai-platform/
 ├── backend/                    # FastAPI 后端
 │   ├── app/
 │   │   ├── main.py             # 应用入口

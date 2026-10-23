@@ -1,3 +1,4 @@
+import { auditTypeLabel, auditFactCategoryLabel } from '../utils/auditLabels'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { AlertCircle, CheckCircle, ChevronDown, ChevronUp, Clock, RefreshCw } from 'lucide-react'
@@ -140,6 +141,9 @@ function renderDetailValue(key: string, value: unknown, language: string, t: (ke
     if (items.length === 0) return <pre>{language === 'zh' ? '无' : 'None'}</pre>
     return <pre>{items.join('\n')}</pre>
   }
+  if (key === 'fact_category') return <pre>{auditFactCategoryLabel(String(value || ''), language)}</pre>
+  if (key === 'fact_categories' && Array.isArray(value)) return <pre>{value.map(item => auditFactCategoryLabel(String(item), language)).join('、')}</pre>
+  if (key === 'case_type') return <pre>{auditTypeLabel(String(value || ''), language)}</pre>
   if (key === 'doc_type') return <pre>{docTypeName(value, t, docTypeLabels) || stringifyValue(value, language)}</pre>
   return <pre>{stringifyValue(value, language)}</pre>
 }
@@ -160,10 +164,10 @@ const pickRows = (payload: Record<string, any>, keys: string[]) => (
 const zhLabels: Record<string, string> = {
   document_name: '文件',
   doc_type: '文件类型',
-  case_type: '案件类型',
+  case_type: '审计项目类型',
   facts_extracted: '提取事实数',
   fact_categories: '事实分类',
-  prompt: '律师提示',
+  prompt: '审计师提示',
   prompt_chars: '提示长度',
   prompt_used: '使用提示',
   diagnostics: '解析诊断',
@@ -189,23 +193,23 @@ const zhLabels: Record<string, string> = {
   strategy_name: '策略',
   fact_count: '使用事实数',
   versions: '生成版本',
-  section_title: '文案',
+  section_title: '审计底稿',
   instruction: '改写要求',
   history_ref_count: '历史引用数',
   text_quality: '文本质量',
   chunk_count: '分块数',
   coverage_score: '覆盖率',
   potential_gap_count: '潜在遗漏',
-  case_title: '案件',
+  case_title: '审计项目',
 }
 
 const enLabels: Record<string, string> = {
   document_name: 'Document',
   doc_type: 'Document type',
-  case_type: 'Case type',
+  case_type: 'Audit engagement type',
   facts_extracted: 'Facts extracted',
   fact_categories: 'Fact categories',
-  prompt: 'Lawyer guidance',
+  prompt: 'Auditor guidance',
   prompt_chars: 'Guidance length',
   prompt_used: 'Guidance used',
   diagnostics: 'Parse diagnostics',
@@ -231,14 +235,14 @@ const enLabels: Record<string, string> = {
   strategy_name: 'Strategy',
   fact_count: 'Facts used',
   versions: 'Versions',
-  section_title: 'Draft',
+  section_title: 'Audit Draft',
   instruction: 'Rewrite instruction',
   history_ref_count: 'History refs',
   text_quality: 'Text quality',
   chunk_count: 'Chunks',
   coverage_score: 'Coverage',
   potential_gap_count: 'Potential gaps',
-  case_title: 'Case',
+  case_title: 'Audit Engagement',
 }
 
 function labelFor(key: string, language: string) {
@@ -345,7 +349,7 @@ function businessObject(task: AgentTask, language: string, t: (key: string) => s
   const sectionInfo = human.section || {}
   const caseInfo = human.case || {}
   const caseTitle = compactText(task.case_title || caseInfo.title || input.case_title || output.case_title || '-', language, 70)
-  const caseType = compactText(task.case_type || input.case_type || output.case_type || '-', language, 40)
+  const caseType = auditTypeLabel(compactText(task.case_type || input.case_type || output.case_type || '-', language, 40), language)
 
   if (task.task_type === 'fact_extract') {
     return {
@@ -357,7 +361,7 @@ function businessObject(task: AgentTask, language: string, t: (key: string) => s
   }
   if (task.task_type === 'fact_reparse') {
     return {
-      typeName: compactText(fact.category || summary.fact_category || input.fact_category || t('agentTaskFactReparse'), language, 56),
+      typeName: auditFactCategoryLabel(compactText(fact.category || summary.fact_category || input.fact_category || t('agentTaskFactReparse'), language, 56), language),
       objectName: compactText(fact.content || fact.title || input.original_content || output.original_content || t('itemFact'), language),
       caseTitle,
       caseType,

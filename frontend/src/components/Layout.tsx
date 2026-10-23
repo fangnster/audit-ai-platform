@@ -44,7 +44,7 @@ export default function Layout() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <Scale size={22} color="var(--accent-primary)" />
           <span style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--text-primary)' }}>
-            ImmigrationAI
+            AuditAI
           </span>
         </div>
 

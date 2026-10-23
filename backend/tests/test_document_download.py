@@ -277,7 +277,7 @@ async def test_document_type_settings_allow_original_contribution_and_custom_upl
 
 
 @pytest.mark.asyncio
-async def test_fact_extractor_uses_parse_budget_and_original_contribution_guidance(tmp_path):
+async def test_fact_extractor_preserves_legacy_keys_with_audit_guidance_and_parse_budget(tmp_path):
     class FakeParseLLM:
         def __init__(self):
             self.prompt = ""
@@ -312,7 +312,11 @@ async def test_fact_extractor_uses_parse_budget_and_original_contribution_guidan
 
     assert facts[0]["category"] == "original_contribution"
     assert llm.max_tokens == settings.PARSE_MAX_OUTPUT_TOKENS
-    assert "original contribution" in llm.prompt
+    assert "control objectives" in llm.prompt
+    assert "Audit type: Financial Audit / 财务审计" in llm.prompt
+    assert "audit evidence extraction assistant" in llm.system
+    assert "immigration" not in llm.system
+    assert "auditor review" in llm.system
     assert f"at most {settings.PARSE_MAX_FACTS}" in llm.prompt
     assert "IMPORTANT TAIL" in llm.prompt
     assert "G" * (settings.PARSE_MAX_LAWYER_GUIDANCE_CHARS + 1) not in llm.prompt

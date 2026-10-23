@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ImmigrationAI 项目文档</title>
+    <title>AuditAI 审计工作流文档 / Audit Workflow Documentation</title>
     <style>
       :root {
         color-scheme: light;
@@ -70,24 +70,58 @@
   </head>
   <body>
     <main>
-      <h1>ImmigrationAI 项目文档</h1>
-      <p>这里集中放置给试用律师和协作方阅读的公开说明文档。Markdown 文件会以浏览器原始文本形式打开。</p>
+      <h1>AuditAI 审计工作流文档</h1>
+      <p>Audit Workflow Documentation · 中文 / English</p>
+      <p>沿用现有证据整理、事实确认、底稿起草和复核流程。AI 输出由审计人员审核。Markdown 文档以浏览器原始文本形式打开。</p>
+      <p>Evidence → confirmed facts → audit drafts → human review. Public Markdown guides open as text.</p>
       <div class="list">
-        <a href="./platform-v1.md">
-          <strong>AI Agent 移民律师协作平台 V1</strong>
-          <span>平台定位、核心流程、功能模块和试用说明。</span>
-        </a>
-        <a href="./lawyer-user-manual.md">
-          <strong>律师使用手册</strong>
-          <span>案件创建、文件解析、事实审核、文案生成、告警和 Agent 运行记录的操作指引。</span>
-        </a>
         <a href="./readme.md">
-          <strong>README</strong>
+          <strong>中文 README 与快速启动</strong>
           <span>项目概览、本地启动、部署结构和维护入口。</span>
         </a>
+        <a href="./readme.en.md" lang="en">
+          <strong>English README and Quick Start</strong>
+          <span>Project overview, Docker setup, local development and documentation.</span>
+        </a>
+        <a href="./platform-v1.md">
+          <strong>AI Agent 审计协作平台 V1</strong>
+          <span>平台定位、核心流程、功能模块和试用说明。</span>
+        </a>
+        <a href="./audit-user-manual.md">
+          <strong>中文审计操作手册</strong>
+          <span>项目创建、证据解析、事实确认、审计底稿生成、告警和 Agent 运行记录。</span>
+        </a>
+        <a href="./audit-user-manual.en.md" lang="en">
+          <strong>English Audit User Guide</strong>
+          <span>Evidence parsing, fact review, audit drafting, tasks and troubleshooting.</span>
+        </a>
         <a href="./product-requirements.md">
-          <strong>产品需求文档</strong>
+          <strong>产品需求文档 / Product Scope</strong>
           <span>按当前实现整理的平台业务需求和功能边界。</span>
+        </a>
+        <a href="./implementation.md">
+          <strong>中文技术实现说明</strong>
+          <span>架构、API、数据模型、权限、后台任务、缓存和测试。</span>
+        </a>
+        <a href="./implementation.en.md" lang="en">
+          <strong>English Implementation and Operations</strong>
+          <span>Architecture, compatibility, asynchronous workflow, deployment and operations.</span>
+        </a>
+        <a href="./naming-and-backup.md">
+          <strong>命名兼容与本地备份 / Naming and Backup</strong>
+          <span>中英双语类型映射、保留字段、修改前 Git 存档及恢复方法。</span>
+        </a>
+        <a href="./deployment-local-economical.md">
+          <strong>本地部署 / Local Deployment</strong>
+          <span>办公室电脑、内网服务器和 Docker Compose。</span>
+        </a>
+        <a href="./deployment-remote-economical.md">
+          <strong>远程部署 / Production Deployment</strong>
+          <span>单台 VPS、Caddy、API、Worker 和数据服务。</span>
+        </a>
+        <a href="./remote-maintenance-runbook.md">
+          <strong>维护手册 / Maintenance Runbook</strong>
+          <span>CI/CD、日志、备份、回滚和远程运维。</span>
         </a>
       </div>
     </main>

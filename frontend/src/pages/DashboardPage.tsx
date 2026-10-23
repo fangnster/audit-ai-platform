@@ -1,3 +1,4 @@
+import { auditTypeLabel } from '../utils/auditLabels'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
@@ -85,7 +86,7 @@ export default function DashboardPage() {
                 {cases.slice(0, 6).map((c: {id:string;title:string;case_type:string;status:string;created_at:string;updated_at?:string | null}) => (
                   <tr key={c.id}>
                     <td style={{ fontWeight: 500 }}>{c.title}</td>
-                    <td><span className="badge badge-blue">{c.case_type}</span></td>
+                    <td><span className="badge badge-blue">{auditTypeLabel(c.case_type, i18n.language)}</span></td>
                     <td><span className={`badge ${statusColors[c.status] ?? 'badge-gray'}`}>{statusLabels[c.status] ? t(statusLabels[c.status]) : c.status}</span></td>
                     <td style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
                       {formatLocalDateTime(c.updated_at || c.created_at, i18n.language)}

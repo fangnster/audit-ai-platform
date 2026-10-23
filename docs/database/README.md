@@ -1,5 +1,7 @@
 # 数据库结构快照
 
+[English guide](../implementation.en.md) · [命名兼容与备份说明](../naming_and_backup.md)
+
 本目录保存数据库结构参考快照。
 
 ## 文件

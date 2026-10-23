@@ -19,6 +19,7 @@ from app.database import sync_database_url
 from app.models.document import Document, DocumentBlob, UploaderRole, ParseStatus
 from app.models.organization import DocumentCategory
 from app.config import settings
+from app.audit_terms import audit_case_type_label
 from app.services.agent_tasks import release_stale_agent_tasks
 from app.services.cache import delete_pattern, get_json, set_json
 from app.utils.timezone import local_display, local_iso, local_now
@@ -28,19 +29,19 @@ logger = logging.getLogger(__name__)
 
 
 BUILTIN_DOCUMENT_TYPES = [
-    {"id": "evidence", "label": "证据材料", "icon": "📄", "enabled": True, "builtin": True},
-    {"id": "award", "label": "获奖证明", "icon": "🏆", "enabled": True, "builtin": True},
-    {"id": "original_contribution", "label": "原创成果", "icon": "✨", "enabled": True, "builtin": True},
-    {"id": "patent", "label": "专利", "icon": "💡", "enabled": True, "builtin": True},
-    {"id": "publication", "label": "学术发表", "icon": "📝", "enabled": True, "builtin": True},
-    {"id": "citation", "label": "引用数据", "icon": "📊", "enabled": True, "builtin": True},
-    {"id": "employment", "label": "雇佣证明", "icon": "💼", "enabled": True, "builtin": True},
-    {"id": "media", "label": "媒体报道", "icon": "📰", "enabled": True, "builtin": True},
-    {"id": "membership", "label": "专业组织", "icon": "🏛️", "enabled": True, "builtin": True},
-    {"id": "resume", "label": "个人简历", "icon": "👤", "enabled": True, "builtin": True},
-    {"id": "reference_letter", "label": "推荐信", "icon": "✉️", "enabled": True, "builtin": True},
-    {"id": "petition_letter", "label": "申请信", "icon": "📋", "enabled": True, "builtin": True},
-    {"id": "rfi", "label": "RFI 回复", "icon": "📮", "enabled": True, "builtin": True},
+    {"id": "evidence", "label": "审计证据", "icon": "📄", "enabled": True, "builtin": True},
+    {"id": "award", "label": "财务报表", "icon": "🏆", "enabled": True, "builtin": True},
+    {"id": "original_contribution", "label": "内部控制", "icon": "✨", "enabled": True, "builtin": True},
+    {"id": "patent", "label": "合同与协议", "icon": "💡", "enabled": True, "builtin": True},
+    {"id": "publication", "label": "会计记录", "icon": "📝", "enabled": True, "builtin": True},
+    {"id": "citation", "label": "交易明细", "icon": "📊", "enabled": True, "builtin": True},
+    {"id": "employment", "label": "薪酬与人事", "icon": "💼", "enabled": True, "builtin": True},
+    {"id": "media", "label": "外部资料", "icon": "📰", "enabled": True, "builtin": True},
+    {"id": "membership", "label": "政策与制度", "icon": "🏛️", "enabled": True, "builtin": True},
+    {"id": "resume", "label": "业务流程", "icon": "👤", "enabled": True, "builtin": True},
+    {"id": "reference_letter", "label": "函证与声明", "icon": "✉️", "enabled": True, "builtin": True},
+    {"id": "petition_letter", "label": "审计报告", "icon": "📋", "enabled": True, "builtin": True},
+    {"id": "rfi", "label": "审计询证回复", "icon": "📮", "enabled": True, "builtin": True},
     {"id": "other", "label": "其他", "icon": "📁", "enabled": True, "builtin": True},
 ]
 BUILTIN_DOCUMENT_TYPE_IDS = {item["id"] for item in BUILTIN_DOCUMENT_TYPES}
@@ -747,7 +748,7 @@ async def export_document_text(doc_id: uuid.UUID, export_format: str = "txt", cu
     doc = await _get_document_for_user(doc_id, current_user, db)
     case = await db.get(Case, doc.case_id)
     case_title = case.title if case else ""
-    case_type = _enum_text(case.case_type) if case else ""
+    case_type = audit_case_type_label(case.case_type) if case else ""
 
     # Get all facts extracted from this document
     result = await db.execute(
@@ -770,9 +771,9 @@ async def export_document_text(doc_id: uuid.UUID, export_format: str = "txt", cu
     if export_format == "md":
         lines = [f"# 文档解析导出 — {doc.original_filename}\n"]
         if case_title:
-            lines.append(f"- **案件名称**：{case_title}")
+            lines.append(f"- **审计项目名称**：{case_title}")
         if case_type:
-            lines.append(f"- **案件类型**：{case_type}")
+            lines.append(f"- **审计项目类型**：{case_type}")
         lines.append(f"- **生成时间**：{now}")
         lines.append(f"- **创建时间**：{local_display(doc.created_at)}")
         lines.append(f"- **修改时间**：{local_display(doc.updated_at or doc.created_at)}")
@@ -784,7 +785,7 @@ async def export_document_text(doc_id: uuid.UUID, export_format: str = "txt", cu
             lines.append(f"- **解析提示词**：{parse_prompt}")
         lines.append("\n---\n")
         lines.append("## 来源追踪说明")
-        lines.append("- 本导出按原始上传文件汇总 AI 提取的事实，供律师复核事实来源。")
+        lines.append("- 本导出按原始上传文件汇总 AI 提取的事实，供审计师复核事实来源。")
         lines.append("- 每条事实下方列出来源文件、上传文件类型、页码/位置、原文摘录等可读线索；若原文件未提供相关字段，则不会显示。")
         lines.append("\n---\n")
         if facts:
@@ -809,9 +810,9 @@ async def export_document_text(doc_id: uuid.UUID, export_format: str = "txt", cu
     else:  # txt
         lines = [f"文档解析导出 — {doc.original_filename}"]
         if case_title:
-            lines.append(f"案件名称：{case_title}")
+            lines.append(f"审计项目名称：{case_title}")
         if case_type:
-            lines.append(f"案件类型：{case_type}")
+            lines.append(f"审计项目类型：{case_type}")
         lines.append(f"生成时间：{now}")
         lines.append(f"创建时间：{local_display(doc.created_at)}")
         lines.append(f"修改时间：{local_display(doc.updated_at or doc.created_at)}")
@@ -823,7 +824,7 @@ async def export_document_text(doc_id: uuid.UUID, export_format: str = "txt", cu
             lines.append(f"解析提示词：{parse_prompt}")
         lines.append("=" * 60)
         lines.append("来源追踪说明：")
-        lines.append("本导出按原始上传文件汇总 AI 提取的事实，供律师复核事实来源。")
+        lines.append("本导出按原始上传文件汇总 AI 提取的事实，供审计师复核事实来源。")
         lines.append("每条事实下方列出来源文件、上传文件类型、页码/位置、原文摘录等可读线索；若原文件未提供相关字段，则不会显示。")
         lines.append("=" * 60)
         if facts:

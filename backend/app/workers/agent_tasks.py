@@ -1,6 +1,6 @@
 """
 Celery tasks: AI agent orchestration.
-- generate_drafts: custom legal draft generation
+- generate_drafts: custom audit draft generation
 - rewrite_section: section-level rewrite with Redis locking
 - fix_fact: P0 priority fact correction after fact confirmation
 """
@@ -26,19 +26,19 @@ redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
 
 SECTION_LOCK_TTL = 120  # seconds
 DEFAULT_DOCUMENT_TYPE_LABELS = {
-    "evidence": "证据材料",
-    "award": "获奖证明",
-    "original_contribution": "原创成果",
-    "patent": "专利",
-    "publication": "学术发表",
-    "citation": "引用数据",
-    "employment": "雇佣证明",
-    "media": "媒体报道",
-    "membership": "专业组织",
-    "resume": "个人简历",
-    "reference_letter": "推荐信",
-    "petition_letter": "申请信",
-    "rfi": "RFI 回复",
+    "evidence": "审计证据",
+    "award": "财务报表",
+    "original_contribution": "内部控制",
+    "patent": "合同与协议",
+    "publication": "会计记录",
+    "citation": "交易明细",
+    "employment": "薪酬与人事",
+    "media": "外部资料",
+    "membership": "政策与制度",
+    "resume": "业务流程",
+    "reference_letter": "函证与声明",
+    "petition_letter": "审计报告",
+    "rfi": "审计询证回复",
     "other": "其他",
 }
 
@@ -217,7 +217,7 @@ def _format_draft_reference_appendix(fact_refs: list[dict], document_refs: list[
         return ""
     lines = [
         "---",
-        "生成依据 / 溯源追踪（供律师审核，可在定稿前删除）",
+        "生成依据 / 溯源追踪（供审计师审核，可在定稿前删除）",
         "",
     ]
     if document_refs:
@@ -380,7 +380,7 @@ def _draft_history_refs(session, case_uuid: uuid.UUID, exclude_section_id: uuid.
     refs: list[dict] = []
     for section in session.execute(section_query).scalars().all():
         refs.append({
-            "title": f"当前历史文案：{section.section_title}",
+            "title": f"当前历史审计文稿：{section.section_title}",
             "type": "draft_history",
             "content": section.content,
         })
@@ -413,7 +413,7 @@ def _draft_history_refs(session, case_uuid: uuid.UUID, exclude_section_id: uuid.
 )
 def generate_drafts(self, case_id: str, agent_task_id: str):
     """
-    Generate one strategy-driven, lawyer-customized draft for a case.
+    Generate one strategy-driven, auditor-customized draft for a case.
     Reads selected facts, prompt, and knowledge from DB, then writes one full DraftSection.
     """
     from app.models.fact import Fact, FactStatus
@@ -539,7 +539,7 @@ def generate_drafts(self, case_id: str, agent_task_id: str):
                     })
             # Historical full drafts are intentionally not injected automatically.
             # Older same-case drafts can carry a filing-letter structure that overrides
-            # the lawyer's current custom format request. Lawyers can still select
+            # the auditor's current custom format request. Lawyers can still select
             # knowledge-base templates explicitly when they want a prior structure.
             history_refs: list[dict] = []
 
@@ -935,7 +935,7 @@ def reparse_fact(self, case_id: str, fact_id: str, agent_task_id: str):
             }
 
             source_section = source_text or (
-                "The original document text is not available. Use only the original extracted fact, structured metadata, and lawyer correction below."
+                "The original document text is not available. Use only the original extracted fact, structured metadata, and auditor correction below."
             )
             resume_reparse_rules = ""
             if _looks_like_resume_context(fact, doc_name, source_text):
@@ -943,9 +943,9 @@ def reparse_fact(self, case_id: str, fact_id: str, agent_task_id: str):
 
 Resume/CV reparse rules:
 - Treat resume/CV entries as objective facts, not as weak background details.
-- If the lawyer points to an education, employment, publication, patent, award, membership, service, project, or metric entry, preserve the concrete date, title, organization, venue, number, and source wording when available.
+- If the auditor points to an education, employment, publication, patent, award, membership, service, project, or metric entry, preserve the concrete date, title, organization, venue, number, and source wording when available.
 - Revise this single fact precisely; do not replace it with a broad career summary.
-- Do not add an immigration legal conclusion unless the lawyer specifically asks for one."""
+- Do not add an unsupported audit conclusion or claim that audit procedures were completed."""
 
             knowledge_section = ""
             if knowledge_refs:
@@ -953,9 +953,9 @@ Resume/CV reparse rules:
                     f"--- {item['title']} ({item['type']}) ---\n{item['content']}"
                     for item in knowledge_refs
                 ]
-                knowledge_section = "\n\nLawyer-selected parsing prompt and agent strategy references:\n" + "\n\n".join(parts)
+                knowledge_section = "\n\nAuditor-selected parsing prompt and agent strategy references:\n" + "\n\n".join(parts)
 
-            prompt = f"""A lawyer disputed an extracted immigration case fact. Re-parse the source context and revise the fact according to the lawyer's comment.
+            prompt = f"""An auditor disputed an extracted audit evidence fact. Re-parse the source context and revise the fact according to the auditor's comment.
 
 Source document: {doc_name}
 Fact category: {fact.category}
@@ -967,10 +967,10 @@ Source document text or available source context:
 Original extracted fact:
 {original_content}
 
-Lawyer dispute/comment:
+Auditor dispute/comment:
 {dispute_comment}
 
-Return ONLY the revised fact content in 1-3 precise sentences. Do not add facts that are not supported by the source context, original fact, or lawyer correction."""
+Return ONLY the revised fact content in 1-3 precise sentences. Do not add facts that are not supported by the source context, original fact, or auditor correction."""
 
             case = session.get(Case, uuid.UUID(case_id))
             case_title = case.title if case else ""
@@ -982,7 +982,7 @@ Return ONLY the revised fact content in 1-3 precise sentences. Do not add facts 
             try:
                 regenerated = _run_async(LLMService.from_org_settings(org_settings).generate(
                     prompt,
-                    system="You are a careful legal fact extraction assistant. Revise extracted facts conservatively.",
+                    system="You are a careful audit evidence extraction assistant. Revise extracted facts conservatively.",
                     temperature=0.2,
                     max_tokens=700,
                 ))
@@ -990,7 +990,7 @@ Return ONLY the revised fact content in 1-3 precise sentences. Do not add facts 
                 fallback_used = True
                 llm_error = str(exc)
                 regenerated = (
-                    f"【基于异议重新生成】根据律师反馈「{dispute_comment}」，"
+                    f"【基于异议重新生成】根据审计师反馈「{dispute_comment}」，"
                     f"重新分析文档 '{doc_name}' 的内容：{fact.content} "
                     f"经修正后的事实描述已根据异议观点进行调整和补充。"
                 )
@@ -1071,7 +1071,7 @@ def _split_into_sections(content: str, draft_title: str = "") -> list[tuple[str,
         value = value.strip()
         value = re.sub(r"^#{1,6}\s+", "", value)
         value = re.sub(r"^\*\*(.+)\*\*$", r"\1", value)
-        value = re.sub(r"^(?:title|document title|petition title)[:：]\s*", "", value, flags=re.IGNORECASE)
+        value = re.sub(r"^(?:title|document title|audit title|report title|petition title)[:：]\s*", "", value, flags=re.IGNORECASE)
         return value.strip(" \t:-–—")
 
     def looks_like_document_title(value: str) -> bool:
@@ -1083,7 +1083,7 @@ def _split_into_sections(content: str, draft_title: str = "") -> list[tuple[str,
             return False
         if re.match(r"^(?:[ivx]+\.\s+|criterion\s+\d+)", lower, re.IGNORECASE):
             return False
-        return any(token in lower for token in ("petition", "letter", "brief", "application", "申请", "文案"))
+        return any(token in lower for token in ("audit", "report", "workpaper", "memo", "petition", "letter", "brief", "application", "审计", "报告", "申请", "审计文稿"))
 
     content = strip_think_tags(content)
     lines = content.split('\n')
@@ -1095,7 +1095,7 @@ def _split_into_sections(content: str, draft_title: str = "") -> list[tuple[str,
         first_title = ""
         if re.match(r"^#\s+\S+", first_line):
             first_title = clean_title(first_line)
-        elif re.match(r"^\*\*.+\*\*$", first_line) or re.match(r"^(?:title|document title|petition title)[:：]\s*", first_line, re.IGNORECASE):
+        elif re.match(r"^\*\*.+\*\*$", first_line) or re.match(r"^(?:title|document title|audit title|report title|petition title)[:：]\s*", first_line, re.IGNORECASE):
             first_title = clean_title(first_line)
         elif looks_like_document_title(first_line):
             first_title = clean_title(first_line)
@@ -1167,7 +1167,7 @@ def _strip_reasoning_and_code_fences(content: str) -> str:
 )
 def generate_rfi(self, case_id: str, rfi_text: str, agent_task_id: str):
     """
-    Generate RFI/RFE response letter using AI.
+    Generate an audit information request response using AI.
     """
     from app.models.agent_task import AgentTask, AgentTaskStatus
     from app.models.fact import Fact, FactStatus
@@ -1200,13 +1200,13 @@ def generate_rfi(self, case_id: str, rfi_text: str, agent_task_id: str):
             org_settings = org.settings if org and org.settings else {}
 
             prompt = f"""
-You are an expert US immigration lawyer. The USCIS has issued an RFI/RFE (Request for Evidence) for an EB-1A petition.
-Please draft a professional, persuasive response letter addressing the USCIS's concerns.
+You are a careful audit assistant responding to an audit information or evidence request.
+Draft an objective response that addresses each query using approved evidence, identifies gaps, and requires auditor review before issue. Do not invent procedures, test results, or an audit opinion.
 
-RFI/RFE Text from USCIS:
+Audit query text:
 {rfi_text}
 
-Approved Case Facts:
+Auditor-approved evidence facts:
 {facts_str}
 
 Please generate the response letter in markdown format.
@@ -1214,7 +1214,7 @@ Please generate the response letter in markdown format.
             # Call LLM
             response_content = _run_async(LLMService.from_org_settings(org_settings).generate(
                 prompt=prompt,
-                system_prompt="You are an expert US immigration lawyer.",
+                system_prompt="You are a careful audit assistant. Preserve evidence references and require auditor review before issue.",
             ))
 
             # Save result (for simplicity, storing in agent_task output, in reality might be a new Document or DraftSection)

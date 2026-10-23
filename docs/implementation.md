@@ -1,35 +1,37 @@
-# AI Agent 移民律师协作平台 — 技术实现文档 V1.2
+# AI Agent 审计协作平台 — 技术实现文档 V1.2
 
-更新时间：2026-04-27
+[English implementation and operations guide](implementation.en.md) · [中英文命名与备份说明](naming_and_backup.md)
+
+更新时间：2026-10-23
 适用范围：当前仓库已实现功能。本文是当前唯一技术实现文档，用于说明系统架构、关键流程、数据模型、权限、缓存、部署和测试边界。
 
 ## 0. 当前实现校正
 
-本系统已经从早期“组织/律所多租户协作平台”收口为更轻量的律师工作台：
+本系统已经从早期“组织/审计机构多租户协作平台”收口为更轻量的审计人员工作台：
 
-- 公司/律所名称仍在注册页和设置页保留，可读可改，但仅作为用户资料字段。
-- 组织/律所表结构保留为历史兼容壳，不参与案件、知识库、模型配置或权限筛选。
-- 业务权限以“登录用户 + 案件成员 + 系统管理员角色”为主。
-- 知识库只按律师本人 `user_id` 隔离，不按组织或律所共享。
-- 文件解析、事实重解析、文案生成和 AI 重写都已改为后台 Agent 任务，并加入输入预算、知识库筛选、任务去重、超时释放、失败记录和可追踪运行记录，重点解决线上远端模型请求过慢和失败问题。
+- 公司/审计机构名称仍在注册页和设置页保留，可读可改，但仅作为用户资料字段。
+- 组织/审计机构表结构保留为历史兼容壳，不参与审计项目、知识库、模型配置或权限筛选。
+- 业务权限以“登录用户 + 审计项目成员 + 系统管理员角色”为主。
+- 知识库只按审计人员本人 `user_id` 隔离，不按组织或审计机构共享。
+- 文件解析、事实重解析、审计底稿生成和 AI 重写都已改为后台 Agent 任务，并加入输入预算、知识库筛选、任务去重、超时释放、失败记录和可追踪运行记录，重点解决线上远端模型请求过慢和失败问题。
 - 当前不提供客户门户、客户登录、自动邮件补件、团队权限审批、全文向量检索或多人实时协同编辑。
 
 ## 1. 产品与技术目标
 
-ImmigrationAI 是面向移民律师和案件助理的 AI Agent 协作平台，用于把案件材料整理成可核验事实，再基于律师确认的事实生成或改写移民申请文案。
+AuditAI 是面向审计人员和审计助理的 AI Agent 协作平台，用于把审计项目材料整理成可核验事实，再基于审计人员确认的事实生成或改写审计报告草稿。
 
 当前 V1 目标：
 
-- 按案件集中管理文件、事实、任务、知识库和文案。
-- 用 Agent 大模型辅助文件解析、事实重解析、翻译、文案生成和 AI 重写。
-- 保留律师审核、事实确认、版本恢复和系统后台管理能力。
+- 按审计项目集中管理文件、事实、任务、知识库和报告。
+- 用 Agent 大模型辅助文件解析、事实重解析、翻译、审计底稿生成和 AI 重写。
+- 保留审计人员审核、事实确认、版本恢复和系统后台管理能力。
 - 通过 Redis 缓存、数据库索引、输入预算和任务去重降低线上卡住概率。
 - 以 Docker Compose 支持本地部署和经济型远程部署。
 
 非目标：
 
-- 不替代律师事实核验、法律判断和最终签字审核。
-- 不在当前版本实现真正的组织/律所业务权限体系。
+- 不替代审计人员事实核验、专业判断和最终签字审核。
+- 不在当前版本实现真正的组织/审计机构业务权限体系。
 - 不提供客户门户或客户直接上传补材料入口。
 
 ## 2. 系统架构
@@ -41,7 +43,7 @@ React 18 + TypeScript + Vite
     -> Redis 7：缓存 + Celery broker/result backend
     -> S3-compatible Storage：MinIO / Cloudflare R2 / Supabase Storage
     -> LLM Provider：MiniMax / OpenAI-compatible / Claude / Gemini / Ollama
-  -> Celery Worker：文件解析、事实重解析、文案生成、AI 重写、RFI/Agent 任务
+  -> Celery Worker：文件解析、事实重解析、审计底稿生成、AI 重写、RFI/Agent 任务
   -> Caddy：生产 HTTPS、静态前端、API 反向代理
 ```
 
@@ -51,7 +53,7 @@ React 18 + TypeScript + Vite
 |------|------|
 | 前端 | Vite 构建静态文件，生产由 Caddy 提供 |
 | API | FastAPI，统一 `/api/v1` 路由 |
-| Worker | Celery Worker，处理文件解析、事实重解析、文案生成、AI 重写等异步 Agent 任务 |
+| Worker | Celery Worker，处理文件解析、事实重解析、审计底稿生成、AI 重写等异步 Agent 任务 |
 | 数据库 | PostgreSQL 16 |
 | 缓存/队列 | Redis 7 |
 | 文件存储 | MinIO 或 S3-compatible 远端存储 |
@@ -80,7 +82,7 @@ React 18 + TypeScript + Vite
 
 - 当前没有使用 LiteLLM。
 - 当前没有把 pgvector 作为业务检索依赖。
-- 当前富文本能力以文案段落、版本和导出为主，TipTap 属后续规划。
+- 当前富文本能力以底稿段落、版本和导出为主，TipTap 属后续规划。
 
 ## 4. 前端实现
 
@@ -90,18 +92,18 @@ React 18 + TypeScript + Vite
 |------|------|
 | `frontend/src/App.tsx` | 路由定义、登录保护、管理员路由保护 |
 | `frontend/src/components/Layout.tsx` | 主导航、主题、语言切换、管理员入口 |
-| `frontend/src/pages/CasesPage.tsx` | 案件列表、搜索、排序、分页、回收站 |
-| `frontend/src/pages/CaseDetailPage.tsx` | 案件详情入口 |
+| `frontend/src/pages/CasesPage.tsx` | 审计项目列表、搜索、排序、分页、回收站 |
+| `frontend/src/pages/CaseDetailPage.tsx` | 审计项目详情入口 |
 | `frontend/src/pages/DocumentsPage.tsx` | 文件上传、文档类型设置、解析弹窗、下载/导出 |
 | `frontend/src/pages/FactsPage.tsx` | 事实审核、异议、重解析、翻译、补材料任务 |
-| `frontend/src/pages/DraftsPage.tsx` | 文案生成、AI 重写、翻译、版本 |
-| `frontend/src/pages/TasksPage.tsx` | 案件任务 |
-| `frontend/src/pages/GlobalTasksPage.tsx` | 任务中心，跨案件任务 |
-| `frontend/src/pages/AgentRunsPage.tsx` | 当前案件 Agent 运行记录 |
+| `frontend/src/pages/DraftsPage.tsx` | 审计底稿生成、AI 重写、翻译、版本 |
+| `frontend/src/pages/TasksPage.tsx` | 审计项目任务 |
+| `frontend/src/pages/GlobalTasksPage.tsx` | 任务中心，跨审计项目任务 |
+| `frontend/src/pages/AgentRunsPage.tsx` | 当前审计项目 Agent 运行记录 |
 | `frontend/src/components/AgentRunLogPanel.tsx` | Agent 运行记录展示组件 |
 | `frontend/src/components/NotificationHistoryButton.tsx` | 顶部告警历史入口、成功/失败过滤、搜索和清空 |
-| `frontend/src/pages/KnowledgePage.tsx` | 律师个人知识库 |
-| `frontend/src/pages/SettingsPage.tsx` | 个人信息、公司/律所字段、主题、告警设置、模型设置、密码 |
+| `frontend/src/pages/KnowledgePage.tsx` | 审计人员个人知识库 |
+| `frontend/src/pages/SettingsPage.tsx` | 个人信息、公司/审计机构字段、主题、告警设置、模型设置、密码 |
 | `frontend/src/pages/AdminPage.tsx` | 系统后台 |
 | `frontend/src/api.ts` | API 封装和错误处理 |
 | `frontend/src/utils/llmError.ts` | 大模型错误可读化 |
@@ -109,29 +111,29 @@ React 18 + TypeScript + Vite
 
 前端实现原则：
 
-- 页面直接面向律师工作流，不做营销首页。
-- 事实、文件、文案、任务等列表提供搜索/排序/分页或回收站能力。
+- 页面直接面向审计人员工作流，不做营销首页。
+- 事实、文件、报告、任务等列表提供搜索/排序/分页或回收站能力。
 - 大模型失败时尽量展示可读错误，避免只显示网络异常。
 - 解析和重解析弹窗保持知识库选择体验一致。
-- 文件解析、事实重解析、文案生成和 AI 重写都可以在案件内 Agent 运行记录页追踪状态和结果。
-- 告警历史中的名称优先使用源对象名称，例如原始文件名、事实内容、文案标题、案件名或任务名，而不是“已保存”“已删除”等操作文案。
+- 文件解析、事实重解析、审计底稿生成和 AI 重写都可以在审计项目内 Agent 运行记录页追踪状态和结果。
+- 告警历史中的名称优先使用源对象名称，例如原始文件名、事实内容、底稿标题、审计项目名或任务名，而不是“已保存”“已删除”等操作报告。
 
 ## 5. 后端路由
 
 | Router | 前缀 | 职责 |
 |--------|------|------|
 | `auth.py` | `/api/v1/auth` | 注册、登录、当前用户、个人信息、密码 |
-| `cases.py` | `/api/v1/cases` | 案件 CRUD、搜索、排序、分页、回收站、成员 |
+| `cases.py` | `/api/v1/cases` | 审计项目 CRUD、搜索、排序、分页、回收站、成员 |
 | `documents.py` | `/api/v1/documents` | 文件类型、上传、解析、下载、导出 |
 | `facts.py` | `/api/v1/facts` | 事实列表、确认、异议重解析、翻译、删除 |
-| `drafts.py` | `/api/v1/drafts` | 文案生成、重写、导出、版本、Agent 运行记录 |
+| `drafts.py` | `/api/v1/drafts` | 审计底稿生成、重写、导出、版本、Agent 运行记录 |
 | `tasks.py` | `/api/v1/tasks` | 待办任务、完成、恢复、删除 |
-| `knowledge.py` | `/api/v1/knowledge` | 律师个人知识库 |
+| `knowledge.py` | `/api/v1/knowledge` | 审计人员个人知识库 |
 | `translation.py` | `/api/v1/translate` | 翻译 |
 | `orgs.py` | `/api/v1/orgs` | 历史兼容组织壳和模型设置兼容入口 |
-| `admin.py` | `/api/v1/admin` | 系统后台：概览、用户、案件、密码重置、删除 |
+| `admin.py` | `/api/v1/admin` | 系统后台：概览、用户、审计项目、密码重置、删除 |
 | `sessions.py` | `/api/v1/sessions` | 用户 UI 会话状态 |
-| `ws.py` | `/ws/cases/{case_id}` | 案件 WebSocket 通道 |
+| `ws.py` | `/ws/cases/{case_id}` | 审计项目 WebSocket 通道 |
 
 ## 6. 数据模型
 
@@ -139,11 +141,11 @@ React 18 + TypeScript + Vite
 
 - `users`：账号、密码哈希、姓名、`firm_name`、系统管理员标记、profile。
 - `organizations` / `org_members`：历史兼容结构，当前业务不依赖其权限。
-- `cases` / `case_members`：案件与成员关系，业务权限以案件成员为准。
+- `cases` / `case_members`：审计项目与成员关系，业务权限以审计项目成员为准。
 - `documents`：文件元数据、对象存储路径、解析状态、`doc_type`。
 - `facts` / `fact_collaborations`：事实、确认状态、异议重解析记录。
-- `knowledge_items`：律师个人知识库。
-- `draft_sections` / `draft_revisions`：文案段落和历史版本。
+- `knowledge_items`：审计人员个人知识库。
+- `draft_sections` / `draft_revisions`：底稿段落和历史版本。
 - `client_tasks`：任务中心。
 - `agent_tasks`：Agent 异步任务记录。
 - `user_sessions`：前端会话状态。
@@ -161,7 +163,7 @@ React 18 + TypeScript + Vite
 | 迁移 | 作用 |
 |------|------|
 | `010_add_system_admin_users` | 增加系统管理员字段 |
-| `011_add_user_firm_name` | 增加用户公司/律所字段 |
+| `011_add_user_firm_name` | 增加用户公司/审计机构字段 |
 | `012_document_type_customization` | 文档类型从 enum 改为 varchar，支持用户自定义 |
 | `013_database_cache_indexes` | 增加后台、知识库、事实、任务、Agent 查询索引 |
 
@@ -170,34 +172,34 @@ React 18 + TypeScript + Vite
 当前权限规则：
 
 - 登录后才能访问业务接口。
-- 案件相关资源通过 `ensure_case_member` 校验。
-- 知识库查询只取当前律师 `user_id`。
+- 审计项目相关资源通过 `ensure_case_member` 校验。
+- 知识库查询只取当前审计人员 `user_id`。
 - 系统后台通过 `SystemAdminUser` 依赖校验。
-- 公司/律所字段不用于权限判断。
+- 公司/审计机构字段不用于权限判断。
 
 系统管理员保护：
 
 - 不能删除当前登录管理员自己。
 - 不能禁用最后一个启用中的系统管理员。
 - 重置密码只能设置新密码，不能读取旧密码。
-- 删除用户或案件时需要关联处理案件、文件、事实、文案、任务、知识库和对象存储文件。
+- 删除用户或审计项目时需要关联处理审计项目、文件、事实、报告、任务、知识库和对象存储文件。
 
 ## 8. 业务流程
 
 ### 8.1 注册与设置
 
-1. 用户注册邮箱、密码、姓名和公司/律所名称。
-2. 公司/律所名称写入 `users.firm_name`。
-3. 设置页可修改姓名、电话、公司/律所名称、密码、主题、告警偏好和模型设置。
+1. 用户注册邮箱、密码、姓名和公司/审计机构名称。
+2. 公司/审计机构名称写入 `users.firm_name`。
+3. 设置页可修改姓名、电话、公司/审计机构名称、密码、主题、告警偏好和模型设置。
 4. `SYSTEM_ADMIN_EMAILS` 中匹配的邮箱注册或登录后会获得系统管理员角色。
 
-### 8.2 案件管理
+### 8.2 审计项目管理
 
-1. 律师创建案件，填写标题、类型、客户姓名、客户邮箱或电话。
+1. 审计人员创建审计项目，填写标题、类型、客户姓名、客户邮箱或电话。
 2. 客户邮箱和电话至少填写一个。
-3. 案件列表支持搜索、排序、分页。
-4. 案件可软删除、恢复、彻底删除。
-5. 案件相关资源统一按案件成员校验。
+3. 审计项目列表支持搜索、排序、分页。
+4. 审计项目可软删除、恢复、彻底删除。
+5. 审计项目相关资源统一按审计项目成员校验。
 
 ### 8.3 文件上传与解析
 
@@ -209,11 +211,11 @@ POST /api/v1/documents/cases/{case_id}/documents
 
 流程：
 
-1. 校验案件成员。
+1. 校验审计项目成员。
 2. 校验文档类型是否为当前用户启用类型。
 3. 上传到 S3-compatible storage。
 4. 创建 `Document`，状态为 `pending`。
-5. 清理文件、案件和后台缓存。
+5. 清理文件、审计项目和后台缓存。
 
 解析入口：
 
@@ -223,7 +225,7 @@ POST /api/v1/documents/{doc_id}/parse
 
 流程：
 
-1. 律师手动点击「AI 解析」。
+1. 审计人员手动点击「AI 解析」。
 2. 弹窗输入提示词或选择知识库。
 3. 调用 `release_stale_agent_tasks` 释放超时的同文件解析任务。
 4. 检查同一文件是否已有 `queued/processing` 的 `fact_extract` 任务；若有则返回现有任务。
@@ -245,9 +247,9 @@ POST /api/v1/documents/{doc_id}/parse
 - `PARSE_TASK_TIME_LIMIT_SECONDS`
 - PDF 大文件优先抽取开头和结尾页。
 - 文本会按 `PARSE_CHUNK_MAX_CHARS`、`PARSE_CHUNK_OVERLAP_CHARS`、`PARSE_MAX_CHUNKS` 分块处理。
-- 简历/CV/个人履历会生成简历分区辅助信息，低产出时触发重试，并在覆盖率不足时做缺口检查。
+- 业务流程（沿用 `resume` 解析分支）会生成业务流程分区辅助信息，低产出时触发重试，并在覆盖率不足时做缺口检查。
 - 解析诊断记录文本质量、分块数量、候选信号、覆盖率、潜在遗漏数量和告警。
-- `原创成果` 等类型加入专门指导。
+- `内部控制` 等类型加入专门指导。
 - 解析入口知识库只允许提示词模板和 Agent 策略。
 
 ### 8.4 文件类型自定义
@@ -268,18 +270,18 @@ PATCH /api/v1/documents/types
 
 内置类型包括：
 
-- 证据材料
-- 获奖证明
-- 原创成果
-- 专利
-- 学术发表
-- 引用数据
-- 雇佣证明
-- 媒体报道
-- 专业组织
-- 推荐信
-- 申请信
-- RFI/RFE 回复
+- 审计证据
+- 财务报表
+- 内部控制
+- 合同与协议
+- 会计记录
+- 交易明细
+- 薪酬与人事
+- 外部资料
+- 政策与制度
+- 函证与声明
+- 审计报告
+- 审计询证回复
 - 其他
 
 ### 8.5 事实审核与异议重解析
@@ -295,7 +297,7 @@ PATCH /api/v1/documents/types
 
 事实异议重解析：
 
-1. 律师点击「有异议」。
+1. 审计人员点击「有异议」。
 2. 页面保持原有输入异议意见风格。
 3. 输入异议后再次点击重新解析。
 4. 弹出与文件上传解析一致的知识库选择弹窗。
@@ -311,20 +313,20 @@ PATCH /api/v1/documents/types
 知识库类型：
 
 - 提示词模板。
-- 文案模板。
+- 底稿模板。
 - 范文。
 - Agent 策略。
 
 筛选规则：
 
-- 只查询当前律师本人 `user_id` 下知识库。
-- 不查询组织或律所知识库。
+- 只查询当前审计人员本人 `user_id` 下知识库。
+- 不查询组织或审计机构知识库。
 - 所有入口检索只依靠标题和标签。
 - 不按正文内容检索。
 - 文件解析/事实重解析只允许提示词模板和 Agent 策略。
-- 文案生成/AI 重写允许全部知识库类型。
+- 审计底稿生成/AI 重写允许全部知识库类型。
 
-### 8.7 文案生成与 AI 重写
+### 8.7 审计底稿生成与 AI 重写
 
 生成入口：
 
@@ -334,12 +336,12 @@ POST /api/v1/drafts/cases/{case_id}/generate
 
 流程：
 
-1. 校验案件成员。
+1. 校验审计项目成员。
 2. 校验知识库 ID 是否属于当前用户。
-3. 检查同案件是否已有 `queued/processing` 生成任务。
+3. 检查同审计项目是否已有 `queued/processing` 生成任务。
 4. 创建 `agent_tasks` 记录。
 5. 投递 Celery `generate_drafts`。
-6. Worker 查询事实、知识库、历史文案。
+6. Worker 查询事实、知识库、历史报告。
 7. 构造压缩后的 prompt。
 8. 调用 LLM。
 9. 拆分为 `draft_sections`。
@@ -354,9 +356,9 @@ POST /api/v1/drafts/sections/{section_id}/rewrite
 重写会：
 
 - 保存旧版本到 `draft_revisions`。
-- 使用当前段落、律师指令、选中事实和知识库。
+- 使用当前段落、审计人员指令、选中事实和知识库。
 - 更新段落内容。
-- 清理文案缓存。
+- 清理报告缓存。
 
 生成预算：
 
@@ -373,13 +375,13 @@ POST /api/v1/drafts/sections/{section_id}/rewrite
 
 这些预算用于减少远端模型超时、上下文过长和返回过长导致的失败。
 
-文案生成和 AI 重写状态：
+审计底稿生成和 AI 重写状态：
 
-- 同一案件已有 `draft_generate` 的 `queued/processing` 任务时，后端返回现有任务，避免重复生成。
+- 同一审计项目已有 `draft_generate` 的 `queued/processing` 任务时，后端返回现有任务，避免重复生成。
 - Worker 开始前和 LLM 返回后都会检查任务是否仍处于活动状态；已被超时释放或人工取消的旧任务不会写回结果。
-- 缺少案件、事实、文案段落等必要输入时，任务标记为 `failed`，错误写入 `error_message`。
+- 缺少审计项目、事实、底稿段落等必要输入时，任务标记为 `failed`，错误写入 `error_message`。
 - 成功任务写入版本、使用事实数量、知识库引用数量等结果。
-- 关联事实、策略、知识库、文件和文案标题在前端以可读文本展示，机器 ID 会被过滤或压缩。
+- 关联事实、策略、知识库、文件和底稿标题在前端以可读文本展示，机器 ID 会被过滤或压缩。
 
 ### 8.7.1 Agent 运行记录
 
@@ -389,21 +391,21 @@ POST /api/v1/drafts/sections/{section_id}/rewrite
 GET /api/v1/drafts/cases/{case_id}/agent-tasks
 ```
 
-前端入口位于每个案件内，在「案件任务」后面，只显示当前案件的 Agent 状态。
+前端入口位于每个审计项目内，在「审计项目任务」后面，只显示当前审计项目的 Agent 状态。
 
 分类：
 
 - 文件解析和重解析：`fact_extract`
 - 事实重解析：`fact_reparse`
-- 文案生成和 AI 重写：`draft_generate`、`rewrite_section`、`rfi_generate`
+- 审计底稿生成和 AI 重写：`draft_generate`、`rewrite_section`、`rfi_generate`
 
 展示规则：
 
 - 支持更新时间升序/降序。
 - 当前接口默认返回最近 20 条，前端按每页 10 条分类分页。
 - 每条记录展示状态、模型、耗时、输入、结果与诊断。
-- `human_context` 会把文件名、事实名、文案标题、策略名、知识库标题等关联上下文转成人能阅读的文本。
-- 文案生成和 AI 重写中的事实依据按普通换行展示，不使用醒目的特殊卡片。
+- `human_context` 会把文件名、事实名、底稿标题、策略名、知识库标题等关联上下文转成人能阅读的文本。
+- 审计底稿生成和 AI 重写中的事实依据按普通换行展示，不使用醒目的特殊卡片。
 
 超时释放：
 
@@ -416,7 +418,7 @@ GET /api/v1/drafts/cases/{case_id}/agent-tasks
 
 翻译能力：
 
-- 事实和文案可中英互译。
+- 事实和报告可中英互译。
 - 后端限制输出 token，并使用低温度。
 - 翻译结果有短缓存，重复翻译同一内容时加速。
 - 失败时通过 `readableLlmError` 展示可读错误。
@@ -425,10 +427,10 @@ GET /api/v1/drafts/cases/{case_id}/agent-tasks
 
 任务能力：
 
-- 案件内任务和全局任务。
+- 审计项目内任务和全局任务。
 - 新建、编辑、审批、完成、重开、删除、恢复。
-- 排序、缓存和跨案件查看。
-- Agent 自动生成和律师手动创建任务均可跟踪。
+- 排序、缓存和跨审计项目查看。
+- Agent 自动生成和审计人员手动创建任务均可跟踪。
 
 ### 8.10 系统后台
 
@@ -448,12 +450,12 @@ GET /api/v1/drafts/cases/{case_id}/agent-tasks
 
 - 系统概览统计。
 - 用户搜索、排序、分页。
-- 案件搜索、排序、分页。
+- 审计项目搜索、排序、分页。
 - 用户启用/停用。
 - 授予或取消系统管理员角色。
 - 重置用户密码。
 - 删除用户。
-- 删除案件。
+- 删除审计项目。
 
 第一个管理员：
 
@@ -484,25 +486,25 @@ frontend/src/pages/SettingsPage.tsx
 
 类别规则：
 
-- `task_submission`：后台任务提交，例如解析任务已提交、文案生成已提交。
-- `agent_document` / `agent_fact` / `agent_draft`：Agent 文件解析、事实重解析、文案生成和 AI 重写结果。
-- `translation`：事实和文案翻译。
-- `document` / `fact` / `draft`：文件、事实和文案的普通操作。
-- `case_task` / `knowledge` / `account_system` / `system`：案件任务、知识库、账号系统和兜底系统消息。
+- `task_submission`：后台任务提交，例如解析任务已提交、审计底稿生成已提交。
+- `agent_document` / `agent_fact` / `agent_draft`：Agent 文件解析、事实重解析、审计底稿生成和 AI 重写结果。
+- `translation`：事实和报告翻译。
+- `document` / `fact` / `draft`：文件、事实和报告的普通操作。
+- `case_task` / `knowledge` / `account_system` / `system`：审计项目任务、知识库、账号系统和兜底系统消息。
 
 源对象命名规则：
 
-- 文件操作使用原始文件名，类型名称使用上传文件类型的可读文案。
+- 文件操作使用原始文件名，类型名称使用上传文件类型的可读报告。
 - 事实操作使用事实内容摘要。
-- 文案生成、AI 重写、翻译、导出、删除和恢复使用文案标题或段落标题。
-- 案件、任务、知识库、后台用户操作使用案件名、任务名、知识库标题或用户姓名邮箱。
-- WebSocket 推送会尽量从 TanStack Query 缓存中追溯段落标题、事实内容或案件名。
+- 审计底稿生成、AI 重写、翻译、导出、删除和恢复使用底稿标题或段落标题。
+- 审计项目、任务、知识库、后台用户操作使用审计项目名、任务名、知识库标题或用户姓名邮箱。
+- WebSocket 推送会尽量从 TanStack Query 缓存中追溯段落标题、事实内容或审计项目名。
 - 如果业务入口未提供元信息，历史页才回退到消息解析或页面名称。
 
 产品边界：
 
-- 告警历史是律师轻量回看成功/失败的入口，不替代 Agent 运行记录。
-- Agent 输入、诊断、分块、覆盖率、事实依据、失败原因等详细信息仍在案件内「Agent 运行记录」查看。
+- 告警历史是审计人员轻量回看成功/失败的入口，不替代 Agent 运行记录。
+- Agent 输入、诊断、分块、覆盖率、事实依据、失败原因等详细信息仍在审计项目内「Agent 运行记录」查看。
 - 本地浏览器清除缓存或更换设备后，告警历史和告警偏好不会自动同步。
 
 ## 9. LLM Provider
@@ -532,7 +534,7 @@ backend/app/llm/provider.py
 - API Key 不在前端明文展示。
 - 模型输出统一清理 `<think>...</think>`。
 - `extract_json` 使用低温度和 token 限制。
-- 解析、翻译、文案生成、重写分别设置预算。
+- 解析、翻译、审计底稿生成、重写分别设置预算。
 - LLM 短 TTL 缓存减少重复请求。
 - 远端错误通过可读错误返回给前端。
 
@@ -554,21 +556,21 @@ backend/app/services/cache.py
 
 已缓存：
 
-- 案件列表、回收站、详情。
+- 审计项目列表、回收站、详情。
 - 文件列表。
 - 事实列表、回收站。
-- 文案列表、回收站。
+- 报告列表、回收站。
 - 任务列表。
 - 知识库列表、回收站。
-- 后台概览、用户列表、案件列表、最近案件。
+- 后台概览、用户列表、审计项目列表、最近审计项目。
 - LLM 短 TTL 结果缓存。
 - 翻译短缓存。
 
 索引优化：
 
-- 案件列表、文件列表、事实列表、任务列表。
+- 审计项目列表、文件列表、事实列表、任务列表。
 - 知识库按 `user_id/type/deleted_at/updated_at` 查询。
-- 后台用户/案件分页排序。
+- 后台用户/审计项目分页排序。
 - Agent 任务状态查询。
 - 软删除和回收站查询。
 
@@ -635,7 +637,7 @@ CI 文件：
 
 已经实现：
 
-- 文案生成任务去重，避免重复点击造成并发堆积。
+- 审计底稿生成任务去重，避免重复点击造成并发堆积。
 - 文件解析和事实重解析按同一文件/同一事实去重，避免重复排队。
 - Agent 超时释放机制会自动失败长时间卡住的排队或处理中任务，并允许重新触发。
 - Worker 在 LLM 调用返回后再次检查任务状态，避免旧任务晚返回后覆盖新结果。
@@ -643,7 +645,7 @@ CI 文件：
 - 列表缓存减少数据库压力。
 - 数据库索引覆盖后台、知识库、事实、任务等高频查询。
 - Worker 任务失败会记录错误。
-- 案件内 Agent 运行记录展示文件、事实、文案、策略和知识库的可读上下文，便于排查线上问题。
+- 审计项目内 Agent 运行记录展示文件、事实、报告、策略和知识库的可读上下文，便于排查线上问题。
 - 大模型输出清理 `<think>` 标签。
 
 仍需操作层配合：
@@ -651,9 +653,9 @@ CI 文件：
 - 大文件解析尽量拆分。
 - 扫描件尽量先 OCR 或转为可复制文本 PDF。
 - 单次生成只选相关事实和少量知识库。
-- 生成完整 petition letter 时应按章节分批生成。
+- 起草完整审计报告时应按章节分批生成。
 - 远端模型超时或 429 时，不要连续重复点击。
-- 管理员需要查看 API、Worker、Redis、案件内 Agent 运行记录和 `agent_tasks.error_message`。
+- 管理员需要查看 API、Worker、Redis、审计项目内 Agent 运行记录和 `agent_tasks.error_message`。
 
 ## 14. 测试覆盖
 
@@ -666,15 +668,15 @@ backend/tests
 覆盖方向：
 
 - 登录、注册、系统管理员。
-- 案件与后台分页排序。
+- 审计项目与后台分页排序。
 - 文件上传、下载、解析失败、文档类型自定义。
 - 事实异议重解析。
-- 文案拆分、生成 prompt、重写历史。
+- 报告拆分、生成 prompt、重写历史。
 - Agent 任务超时释放、重复提交保护和后台解析投递。
 - 告警历史元信息、类别偏好和源对象名称追踪。
 - 组织兼容和模型设置。
 - 翻译错误和缓存行为。
-- 管理员删除用户和案件。
+- 管理员删除用户和审计项目。
 
 常用命令：
 
@@ -690,8 +692,8 @@ git diff --check
 
 当前限制：
 
-- 文件解析仍由律师手动触发，非常大的扫描件可能受 OCR 和远端模型速度影响。
-- 组织/律所没有真正协作权限模型。
+- 文件解析仍由审计人员手动触发，非常大的扫描件可能受 OCR 和远端模型速度影响。
+- 组织/审计机构没有真正协作权限模型。
 - 客户门户未实现。
 - 线上监控目前依赖健康检查、Docker 日志和测试。
 - 文档解析质量取决于文件可读性和大模型稳定性。
@@ -700,16 +702,16 @@ git diff --check
 
 - Agent 运行记录接口增加真正的后端分页、按类别过滤和更多检索条件。
 - 增加客户门户和客户补材料入口。
-- 恢复团队/律所级知识库共享与审批时，重新设计权限边界。
+- 恢复团队/审计机构级知识库共享与审批时，重新设计权限边界。
 - 加入 Sentry、Uptime Kuma、外部备份告警。
 - 对大 PDF、图片 OCR 增加页数选择和预览。
-- 引入更细粒度的文案章节模板和 petition letter 组装导出。
+- 引入更细粒度的报告章节模板和审计报告组装导出。
 
 ## 16. 相关文档
 
 - `README.md`：项目入口、快速启动和文档索引。
 - `docs/product_requirements.md`：当前实现版产品需求文档。
-- `docs/lawyer_user_manual.md`：律师操作手册。
+- `docs/audit_user_manual.md`：审计操作手册。
 - `docs/deployment_local_economical.md`：本地部署文档。
 - `docs/deployment_remote_economical.md`：远程部署文档。
 - `docs/remote_maintenance_runbook.md`：远程维护与 CI/CD 运维档案。

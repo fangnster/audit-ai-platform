@@ -122,7 +122,7 @@ async def approve_task(task_id: uuid.UUID, current_user: CurrentUser, db: DB):
     """Lawyer approves an agent-generated task."""
     task = await _get_task_for_user(task_id, current_user, db)
     if task.created_by_role != "agent" or task.status != "pending_approval":
-        raise HTTPException(400, "Only agent-created tasks pending lawyer approval can be approved")
+        raise HTTPException(400, "Only agent-created tasks pending auditor approval can be approved")
     task.status = "pending"
     task.approved_by_id = current_user.id
     await db.commit()

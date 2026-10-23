@@ -254,7 +254,7 @@ export default function SettingsPage() {
 
   const handleSave = () => {
     if (!firmName.trim()) {
-      toast.error('请填写公司/律所名称', settingsHistoryMeta(name || email || t('profile'), t('profile')))
+      toast.error('请填写公司/审计机构名称', settingsHistoryMeta(name || email || t('profile'), t('profile')))
       return
     }
     saveProfileMutation.mutate()
@@ -351,7 +351,7 @@ export default function SettingsPage() {
                   </div>
                 </div>
                 <div className="form-group">
-                  <label className="form-label">公司/律所</label>
+                  <label className="form-label">公司/审计机构</label>
                   <div style={{ position: 'relative' }}>
                     <Building2 size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
                     <input className="form-input" value={firmName} onChange={e => setFirmName(e.target.value)} style={{ paddingLeft: 38 }} />

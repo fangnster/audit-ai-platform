@@ -1,7 +1,7 @@
 """
 Draft Generation Agent
 
-Generates one strategy-driven, lawyer-customized immigration case document
+Generates one strategy-driven, auditor-customized audit document
 from selected case facts and knowledge references.
 """
 from __future__ import annotations
@@ -12,30 +12,31 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from app.config import settings
+from app.audit_terms import audit_case_type_label
 from app.llm.provider import LLMService
 
 logger = logging.getLogger(__name__)
 
 
-# ── EB-1A Criterion definitions ───────────────────────────────────────────────
-
+# Legacy constant/criterion keys are retained for storage and API compatibility.
+# These are evidence-organization objectives, not a substitute for supplied audit standards.
 EB1A_CRITERIA = {
-    "criterion_1":  "Receipt of lesser nationally or internationally recognized prizes or awards for excellence",
-    "criterion_2":  "Membership in associations requiring outstanding achievement",
-    "criterion_3":  "Published material about the alien in professional or major trade publications",
-    "criterion_4":  "Participation as a judge of others' work",
-    "criterion_5":  "Original scientific, scholarly, artistic, athletic, or business-related contributions of major significance",
-    "criterion_6":  "Authorship of scholarly articles in professional journals or major media",
-    "criterion_7":  "Display of work at artistic exhibitions or showcases",
-    "criterion_8":  "Performance in a leading or critical role for organizations with distinguished reputations",
-    "criterion_9":  "High salary or remuneration commanding in comparison to others in the field",
-    "criterion_10": "Commercial successes in the performing arts",
+    "criterion_1": "Scope, reporting period, entity, and source financial statements",
+    "criterion_2": "Applicable policies, control responsibilities, and authorization",
+    "criterion_3": "Recorded transactions, supporting documentation, and external evidence",
+    "criterion_4": "Review, reconciliation, and control testing evidence",
+    "criterion_5": "Existence, occurrence, and supporting contractual evidence",
+    "criterion_6": "Completeness and accuracy of accounting records",
+    "criterion_7": "Presentation, disclosure, and supporting schedules",
+    "criterion_8": "Business processes, personnel responsibilities, and control operation",
+    "criterion_9": "Amounts, valuation, payroll, and quantitative comparisons",
+    "criterion_10": "Exceptions, risks, corrective actions, and follow-up evidence",
 }
 
 NIW_CRITERIA = {
-    "criterion_1": "The proposed endeavor has substantial merit and national importance",
-    "criterion_2": "The applicant is well-positioned to advance the proposed endeavor",
-    "criterion_3": "On balance, it would be beneficial to the United States to waive the job offer requirement",
+    "criterion_1": "Audit scope, objectives, and applicable requirements supplied by the auditor",
+    "criterion_2": "Procedures performed, source evidence, and identified exceptions",
+    "criterion_3": "Evidence-supported findings, limitations, and follow-up actions for review",
 }
 
 
@@ -149,7 +150,7 @@ class DraftPlan:
 
     def to_prompt_dict(self) -> dict:
         return {
-            "case_type": self.case_type,
+            "case_type": audit_case_type_label(self.case_type),
             "title": self.title,
             "arguments": [argument.to_prompt_dict() for argument in self.arguments],
         }
@@ -157,28 +158,28 @@ class DraftPlan:
 
 # ── Prompt templates ──────────────────────────────────────────────────────────
 
-DRAFT_SYSTEM_PROMPT = """You are a senior immigration case-document drafting assistant with 20+ years of experience.
-You draft the document type, language, tone, structure, and level of detail requested by the lawyer.
+DRAFT_SYSTEM_PROMPT = """You are a senior audit document drafting assistant.
+You draft the document type, language, tone, structure, and level of detail requested by the auditor.
 
 Your writing must:
-- Treat the lawyer's title, instructions, and selected knowledge references as the controlling format requirements
-- Use formal legal language when the requested output is a legal submission or attorney work product
+- Treat the auditor's title, instructions, and selected knowledge references as the controlling format requirements
+- Use formal, objective audit language and distinguish observed facts, procedures, findings, and limitations
 - Cite specific facts and quantitative evidence from the selected facts
-- Connect facts to immigration criteria only when the requested format calls for legal argument
+- Connect facts to audit objectives or supplied standards only when the requested format calls for that analysis
 - Preserve factual accuracy and avoid inventing evidence
 - Be specific and concrete, never vague"""
 
-DRAFT_PROMPT_TEMPLATE = """Draft a user-customized immigration case document.
-CASE TYPE BACKGROUND: {case_type}
+DRAFT_PROMPT_TEMPLATE = """Draft a user-customized audit document for human review.
+AUDIT TYPE BACKGROUND: {case_type}
 Use the case type as background only; it does not determine the document format by itself.
 
 DOCUMENT TITLE:
 {draft_title_instruction}
 
-LAWYER'S REQUIRED FORMAT AND CONTENT INSTRUCTIONS:
+AUDITOR'S REQUIRED FORMAT AND CONTENT INSTRUCTIONS:
 {user_prompt_section}
 
-CASE FACTS (use these as the factual record):
+AUDIT FACTS (use these as the factual record):
 {facts_json}
 
 {organization_context_section}
@@ -189,30 +190,30 @@ FORMAT BOUNDARY:
 {format_boundary}
 
 OUTPUT RULES:
-1. The lawyer's instructions control the document type, section order, language, tone, and formatting. Do not default to any fixed legacy format unless the lawyer asks for it.
+1. The auditor's instructions control the document type, section order, language, tone, and formatting. Do not default to any fixed legacy format unless the auditor asks for it.
 2. Start with one visible Markdown title line using "# Title"
 3. Produce one complete, continuous full draft in the requested format.
 4. Treat any organization context as helper input, not mandatory section headings.
-5. Do not use a USCIS filing-letter structure, salutation, signature block, or fixed eligibility brief structure unless the lawyer's title or instructions explicitly request that kind of filing draft.
-6. If the lawyer specifies headings or sections, use those headings as the primary outline.
+5. Do not impose a fixed audit report, opinion, salutation, or signature block unless the auditor's title or instructions explicitly request that format.
+6. If the auditor specifies headings or sections, use those headings as the primary outline.
 7. Use the strongest selected case facts and knowledge references to satisfy the requested requirements; summarize supporting facts instead of exhaustively repeating every detail.
-8. Knowledge references are supporting material; do not copy their document type, boilerplate, or filing structure when it conflicts with the lawyer's requested format.
-9. Do not invent facts, citations, dates, awards, roles, publications, or legal conclusions not supported by the record.
-10. If the requested format includes immigration eligibility arguments, connect facts to the relevant legal criteria and explain why the standards are met.
-11. If the requested format is a memo, outline, client letter, evidence summary, strategy note, RFE response, or other custom document, follow that format instead of a fixed filing structure.
-12. Target length: {target_length}, unless the lawyer specified a different length.
+8. Knowledge references are supporting material; do not copy their document type, boilerplate, or filing structure when it conflicts with the auditor's requested format.
+9. Do not invent facts, source citations, dates, amounts, procedures, test results, or audit conclusions not supported by the record.
+10. If the requested format includes audit findings, connect each finding to the supplied criterion, evidence, risk, and recommendation; state evidence gaps and do not assume a standard is satisfied.
+11. If the requested format is a workpaper, memo, outline, management letter, evidence summary, audit query response, or other custom document, follow that format. Drafts and suggested findings require auditor approval; do not claim an audit opinion has been issued.
+12. Target length: {target_length}, unless the auditor specified a different length.
 13. Return only the final draft content. Do not include analysis, notes, or <think> blocks.
 
 Draft the requested document now:"""
 
 
-SECTION_REWRITE_PROMPT = """You are an experienced immigration case-document drafting assistant. Rewrite the following full draft
-according to the lawyer's instruction while preserving cited facts and only the legal arguments that still fit the requested format.
+SECTION_REWRITE_PROMPT = """You are an experienced audit document drafting assistant. Rewrite the following full draft
+according to the auditor's instruction while preserving cited evidence, factual limits, and only the findings that fit the requested format. Do not invent completed procedures or turn an unreviewed finding into an issued audit opinion.
 
 ORIGINAL FULL DRAFT:
 {original_content}
 
-LAWYER'S INSTRUCTION:
+AUDITOR'S INSTRUCTION:
 {instruction}
 
 RELEVANT FACTS TO KEEP:
@@ -222,7 +223,7 @@ REWRITE STRATEGY: {style_description}
 FORMAT BOUNDARY:
 {format_boundary}
 
-Rewrite the full draft now. Follow the lawyer's requested format, structure, language, and tone. Return only the rewritten draft content."""
+Rewrite the full draft now. Follow the auditor's requested format, structure, language, and tone. Return only the rewritten draft content."""
 
 
 STRATEGY_STYLES = {
@@ -237,100 +238,40 @@ STRATEGY_STYLES = {
         "target_length": "1500-2100 words",
     },
     "narrative": {
-        "style_name": "narrative persuasion",
-        "style_description": "Open with the beneficiary's core contribution or strongest theme, then organize the facts under the lawyer's requested sections.",
+        "style_name": "audit narrative",
+        "style_description": "Open with the audit objective or most significant supported finding, then organize the facts under the auditor's requested sections.",
         "target_length": "1400-2000 words",
     },
     "criterion": {
         "style_name": "section-by-section analysis",
-        "style_description": "Use the lawyer's requested sections as the organizing points. Do not add any section framework that the title or instructions did not request.",
+        "style_description": "Use the auditor's requested sections as the organizing points. Do not add any section framework that the title or instructions did not request.",
         "target_length": "1600-2200 words",
     },
 }
 
 
+# The legacy names remain internal interfaces; their prompt vocabulary is audit-specific.
 LEGAL_CONTEXT_KEYWORDS = (
-    "legal criterion",
-    "legal criteria",
-    "criterion-by-criterion",
-    "criteria analysis",
-    "eligibility",
-    "legal standard",
-    "regulatory",
-    "8 c.f.r",
-    "uscis",
-    "rfe",
-    "rfi",
-    "request for evidence",
-    "notice of intent",
-    "noid",
-    "i-140",
-    "filing draft",
-    "filing letter",
-    "submission letter",
-    "extraordinary ability",
-    "national interest waiver",
-    "dhanasar",
-    "petition",
-    "法律要件",
-    "法定要件",
-    "法律标准",
-    "法定标准",
-    "法规",
-    "移民局",
-    "补件",
-    "rfe",
-    "rfi",
-    "noid",
-    "递交",
-    "资格论证",
-    "资格分析",
-    "证据论证",
-    "法律论证",
-    "要件论证",
-    "逐项论证",
-    "逐项对应",
-    "满足标准",
-    "申请信",
-    "申请书",
-    "请愿",
+    "audit criterion", "audit criteria", "criterion-by-criterion", "criteria analysis",
+    "audit objective", "audit standard", "assertion", "compliance requirement",
+    "control test", "audit finding", "audit query", "审计要件", "审计标准",
+    "审计目标", "审计认定", "合规要求", "控制测试", "审计发现", "审计询证",
+    "逐项分析", "逐项对应", "满足标准",
 )
 
 CASE_TYPE_LEGAL_MARKERS = (
-    "eb1a",
-    "eb-1a",
-    "eb1b",
-    "eb-1b",
-    "niw",
-    "o1a",
-    "o-1a",
+    "financial audit", "internal audit", "compliance audit", "operational audit",
+    "it audit", "special audit", "财务审计", "内部审计", "合规审计", "运营审计",
+    "信息技术审计", "专项审计",
 )
 
 NEGATED_LEGAL_CONTEXT_PHRASES = (
-    "do not write a petition",
-    "do not write petition",
-    "do not use a filing-letter structure",
-    "do not use legal criteria",
-    "do not organize by legal criteria",
-    "only map to legal criteria when explicitly requested",
-    "legal criteria when explicitly requested",
-    "no legal criteria",
-    "no eligibility analysis",
-    "不要写申请信",
-    "不要写申请书",
-    "不要写请愿",
-    "不要请愿",
-    "不要按法律要件",
-    "不要法律要件",
-    "不要法定要件",
-    "不需要法律要件",
-    "不需要资格论证",
-    "不要资格论证",
-    "不要法律论证",
-    "只有明确要求法律要件时才对应法定标准",
-    "只有在明确要求法律要件时才对应法定标准",
+    "do not use audit criteria", "do not organize by audit criteria",
+    "only map to audit criteria when explicitly requested", "audit criteria when explicitly requested",
+    "no audit criteria", "no criteria analysis", "不要按审计要件", "不要审计要件",
+    "不需要审计要件", "不需要审计认定分析", "只有明确要求审计要件时才对应审计标准",
+    "只有在明确要求审计要件时才对应审计标准",
 )
-
 
 def _normalized_text(*values: str | None) -> str:
     return "\n".join(value for value in values if value).lower()
@@ -353,7 +294,7 @@ def requests_legal_criteria_context(
     user_prompt: str = "",
     criteria: Optional[list[str]] = None,
 ) -> bool:
-    """Return True only when the lawyer explicitly asks for filing/criteria analysis."""
+    """Return True only when the auditor explicitly asks for audit objectives/criteria analysis."""
     if criteria:
         return True
 
@@ -395,11 +336,11 @@ def build_knowledge_section(
     knowledge_parts = []
     for ki in knowledge_refs[: settings.DRAFT_MAX_KNOWLEDGE_ITEMS]:
         ref_type = ki.get("type", "reference")
-        guidance = "Use as prior draft/history context only when it fits the lawyer's current requested format; update facts and strategy."
+        guidance = "Use as prior draft/history context only when it fits the auditor's current requested format; update facts and strategy."
         if ref_type != "draft_history":
-            guidance = "Use as style, structure, template, sample, or agent-strategy guidance. If it conflicts with the lawyer's instructions, the lawyer's instructions control."
+            guidance = "Use as style, structure, template, sample, or agent-strategy guidance. If it conflicts with the auditor's instructions, the auditor's instructions control."
         if not legal_context_required:
-            guidance += " Do not copy USCIS filing, eligibility-brief, salutation, or signature-block structure unless the current instructions request it."
+            guidance += " Do not copy a report opinion, boilerplate, salutation, or signature block unless the current instructions request it. Audit objectives here are generic organizing aids; use applicable standards only when supplied in the current evidence or references."
         content = _truncate_text(str(ki.get("content") or ""), settings.DRAFT_MAX_KNOWLEDGE_CHARS)
         knowledge_parts.append(f"--- {ki['title']} ({ref_type}) ---\n{guidance}\n{content}")
     return "\nKNOWLEDGE BASE AND DRAFT HISTORY REFERENCES:\n" + "\n\n".join(knowledge_parts) + "\n"
@@ -429,12 +370,12 @@ def _limit_draft_plan(plan: DraftPlan, max_facts: int) -> DraftPlan:
 def _format_boundary(legal_context_required: bool) -> str:
     if legal_context_required:
         return (
-            "The lawyer requested legal, eligibility, USCIS/RFE, or criteria-based organization. "
-            "Use legal standards only where they support the requested document type."
+            "The auditor requested audit objectives, findings, queries, or criteria-based organization. "
+            "Use audit objectives as organizing aids and cite only applicable standards supplied in the evidence or references."
         )
     return (
-        "The lawyer did not request eligibility analysis or filing-style argument. "
-        "Do not organize by USCIS criteria, regulatory standards, or default Legal Standard / Evidence / Analysis headings. "
+        "The auditor did not request criteria-based audit analysis. "
+        "Do not impose audit criteria, standards, or default Criterion / Evidence / Finding headings. "
         "Follow the requested title, sections, facts, strategy, and selected knowledge references instead."
     )
 
@@ -455,7 +396,7 @@ class DraftGenerationAgent:
     ) -> str:
         """
         Generate one full draft from approved facts.
-        Incorporates lawyer strategy, user prompt, and knowledge base references.
+        Incorporates auditor strategy, user prompt, and knowledge base references.
         """
         legal_context_required = requests_legal_criteria_context(
             draft_title=draft_title,
@@ -477,18 +418,18 @@ class DraftGenerationAgent:
             criteria_str = "\n".join(f"- {k}: {v}" for k, v in _criteria_map_for_case(case_type, criteria).items())
             draft_plan_json = json.dumps(draft_plan.to_prompt_dict(), ensure_ascii=False, indent=2)
             organization_context_section = (
-                "LEGAL ARGUMENT CONTEXT (included because the lawyer requested filing, eligibility, RFE, or criteria-based analysis):\n"
+                "AUDIT ANALYSIS CONTEXT (included because the auditor requested audit objectives, findings, queries, or criteria-based analysis):\n"
                 "CROSS-DOCUMENT EVIDENCE ORGANIZATION:\n"
                 f"{draft_plan_json}\n\n"
-                "RELEVANT LEGAL CRITERIA:\n"
+                "RELEVANT AUDIT OBJECTIVES:\n"
                 f"{criteria_str}"
             )
         else:
             selected_facts = orchestrator.facts_for_custom_draft(limit=settings.DRAFT_MAX_FACTS)
             organization_context_section = (
                 "CUSTOM DOCUMENT ORGANIZATION:\n"
-                "No legal criteria context was injected because the lawyer did not request eligibility analysis or filing-style argument. "
-                "Use the facts directly under the lawyer's requested headings and document type."
+                "No audit criteria context was injected because the auditor did not request criteria-based analysis. "
+                "Use the facts directly under the auditor's requested headings and document type."
             )
 
         facts_json = json.dumps([fact.to_prompt_dict() for fact in selected_facts], ensure_ascii=False, indent=2)
@@ -522,7 +463,7 @@ class DraftGenerationAgent:
             max_tokens,
         )
         prompt = DRAFT_PROMPT_TEMPLATE.format(
-            case_type=case_type,
+            case_type=audit_case_type_label(case_type),
             draft_title_instruction=draft_title_instruction,
             facts_json=facts_json,
             organization_context_section=organization_context_section,
@@ -573,7 +514,7 @@ class DraftGenerationAgent:
         strategy: str = "strongest_first",
         knowledge_refs: Optional[list[dict]] = None,
     ) -> str:
-        """Rewrite a full draft based on lawyer instruction."""
+        """Rewrite a full draft based on auditor instruction."""
         legal_context_required = requests_legal_criteria_context(user_prompt=instruction)
         style = STRATEGY_STYLES.get(strategy, STRATEGY_STYLES["strongest_first"])
         compact_facts = [
@@ -605,11 +546,11 @@ class DraftGenerationAgent:
         case_facts: list[dict],
         additional_docs: list[str],
     ) -> str:
-        """Generate a response to a USCIS Request for Evidence (RFI/RFE)."""
-        system = "You are an experienced immigration attorney responding to a USCIS Request for Evidence. Be thorough, cite evidence precisely, and address every point raised."
-        prompt = f"""Write a professional response to the following USCIS RFE/RFI:
+        """Generate an audit information or evidence request response."""
+        system = "You are an experienced audit assistant responding to an audit information or evidence request. Address each point, cite available evidence precisely, identify missing evidence, and require auditor review before issue."
+        prompt = f"""Write a professional response to the following audit information request:
 
-RFE/RFI TEXT:
+AUDIT QUERY TEXT:
 {rfi_text}
 
 AVAILABLE EVIDENCE:
@@ -618,7 +559,7 @@ AVAILABLE EVIDENCE:
 ADDITIONAL SUBMITTED DOCUMENTS:
 {chr(10).join(f'- {d}' for d in additional_docs)}
 
-Write a complete, legally sound RFE response letter body:"""
+Write an objective, evidence-supported draft audit query response. Distinguish confirmed evidence from items still requiring follow-up:"""
         return await self.llm.generate(prompt, system=system, temperature=0.3, max_tokens=4096)
 
 
@@ -627,7 +568,7 @@ class DraftGenerationOrchestrator:
     Internal scheduling layer for draft generation.
 
     Uploaded documents are normalized into case-level facts first. The orchestrator then
-    plans legal arguments and selects evidence across every uploaded material before the
+    plans audit evidence themes and selects evidence across every uploaded material before the
     final full-draft prompt is composed.
     """
 
@@ -664,8 +605,8 @@ class DraftGenerationOrchestrator:
         if not arguments:
             fallback = ArgumentUnit(
                 key="case_merits",
-                title="Overall Eligibility and Merits",
-                legal_standard="Use the strongest available evidence to establish eligibility.",
+                title="Overall Audit Evidence and Findings",
+                legal_standard="Use available evidence to describe findings and limitations without assuming a completed audit conclusion.",
                 required_fact_categories={fact.category for fact in self.facts} or {"other"},
                 selected_facts=self._rank_facts(self.facts)[:18],
             )

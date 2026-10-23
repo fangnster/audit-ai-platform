@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.deps import CurrentUser, DB, ensure_case_member
+from app.audit_terms import audit_case_type_label
 from app.models.case import Case
 from app.models.draft import DraftRevision, DraftSection, SectionStatus
 from app.models.agent_task import AgentTask, AgentTaskType, AgentTaskStatus
@@ -30,31 +31,31 @@ STRATEGY_LABELS = {
     "strongest_first": "最强证据优先",
     "conservative": "保守严谨",
     "narrative": "叙事结构",
-    "criterion": "法律要件结构",
-    "rfe_response": "RFE/NOID 逐条回应",
-    "resume_profile": "履历时间线",
-    "legal_criteria": "法律要件组织",
-    "original_contribution": "原创贡献链条",
-    "external_recognition": "外部认可优先",
-    "critical_role": "关键岗位影响",
+    "criterion": "审计要件结构",
+    "rfe_response": "审计询证逐条回应",
+    "resume_profile": "业务流程时间线",
+    "legal_criteria": "审计目标组织",
+    "original_contribution": "内部控制证据链",
+    "external_recognition": "外部证据优先",
+    "critical_role": "关键岗位与控制",
     "rewrite_tighten": "压缩稳健重写",
     "rewrite_keep_facts": "保留事实重组",
 }
 
 BUILTIN_DOCUMENT_TYPE_LABELS = {
-    "evidence": "证据材料",
-    "award": "获奖证明",
-    "original_contribution": "原创成果",
-    "patent": "专利",
-    "publication": "学术发表",
-    "citation": "引用数据",
-    "employment": "雇佣证明",
-    "media": "媒体报道",
-    "membership": "专业组织",
-    "resume": "个人简历",
-    "reference_letter": "推荐信",
-    "petition_letter": "申请信",
-    "rfi": "RFI 回复",
+    "evidence": "审计证据",
+    "award": "财务报表",
+    "original_contribution": "内部控制",
+    "patent": "合同与协议",
+    "publication": "会计记录",
+    "citation": "交易明细",
+    "employment": "薪酬与人事",
+    "media": "外部资料",
+    "membership": "政策与制度",
+    "resume": "业务流程",
+    "reference_letter": "函证与声明",
+    "petition_letter": "审计报告",
+    "rfi": "审计询证回复",
     "other": "其他",
 }
 
@@ -492,7 +493,7 @@ async def generate_drafts(case_id: uuid.UUID, body: GenerateRequest, current_use
             "already_running": True,
             "draft_name": running_params.get("title") or "",
             "status": str(running_task.status.value if hasattr(running_task.status, "value") else running_task.status),
-            "message": "已有文案生成任务正在处理中，请稍候完成后再发起新的生成。",
+            "message": "已有审计文稿生成任务正在处理中，请稍候完成后再发起新的生成。",
         }
     # Create agent task record
     agent_task = AgentTask(
@@ -527,7 +528,7 @@ async def generate_drafts(case_id: uuid.UUID, body: GenerateRequest, current_use
             "agent_task_id": str(agent_task.id),
             "draft_name": body.title,
             "status": "queued",
-            "message": "文案生成已启动，AI 将根据提示词和知识库参考生成文案。",
+            "message": "审计文稿生成已启动，AI 将根据提示词和知识库参考生成审计文稿。",
         }
     except Exception as e:
         # Dev mode: run synchronously
@@ -632,11 +633,11 @@ async def export_drafts(
     version_label = version.upper() if version else "ALL"
 
     if format == "md":
-        lines = [f"# 文案导出 — {version_label}版\n"]
+        lines = [f"# 审计文稿导出 — {version_label}版\n"]
         if case_info.get("title"):
-            lines.append(f"案件名称：{case_info['title']}")
+            lines.append(f"审计项目名称：{case_info['title']}")
         if case_info.get("type"):
-            lines.append(f"案件类型：{case_info['type']}")
+            lines.append(f"审计项目类型：{audit_case_type_label(case_info['type'])}")
         lines.append(f"生成时间：{generated_at}\n")
         lines.append("---\n")
         for s in sections:
@@ -663,12 +664,12 @@ async def export_drafts(
 
         doc = DocxDocument()
         # Title
-        title = doc.add_heading(f"文案导出 — {version_label}版", level=0)
+        title = doc.add_heading(f"审计文稿导出 — {version_label}版", level=0)
         title.alignment = WD_ALIGN_PARAGRAPH.CENTER
         if case_info.get("title"):
-            doc.add_paragraph(f"案件名称：{case_info['title']}")
+            doc.add_paragraph(f"审计项目名称：{case_info['title']}")
         if case_info.get("type"):
-            doc.add_paragraph(f"案件类型：{case_info['type']}")
+            doc.add_paragraph(f"审计项目类型：{audit_case_type_label(case_info['type'])}")
         doc.add_paragraph(f"生成时间：{generated_at}")
         doc.add_paragraph("" )  # spacer
 
@@ -692,11 +693,11 @@ async def export_drafts(
         )
 
     else:  # txt default
-        lines = [f"文案导出 — {version_label}版"]
+        lines = [f"审计文稿导出 — {version_label}版"]
         if case_info.get("title"):
-            lines.append(f"案件名称：{case_info['title']}")
+            lines.append(f"审计项目名称：{case_info['title']}")
         if case_info.get("type"):
-            lines.append(f"案件类型：{case_info['type']}")
+            lines.append(f"审计项目类型：{audit_case_type_label(case_info['type'])}")
         lines.append(f"生成时间：{generated_at}")
         lines.append("=" * 60)
         for s in sections:
@@ -733,9 +734,9 @@ async def export_section(
     if format == "md":
         lines = [f"# {section.section_title}\n"]
         if case_info.get("title"):
-            lines.append(f"案件名称：{case_info['title']}")
+            lines.append(f"审计项目名称：{case_info['title']}")
         if case_info.get("type"):
-            lines.append(f"案件类型：{case_info['type']}")
+            lines.append(f"审计项目类型：{audit_case_type_label(case_info['type'])}")
         lines.append(f"生成时间：{now}\n")
         lines.append(f"创建时间：{local_display(section.created_at)}  |  修改时间：{local_display(section.updated_at)}\n")
         if section.criterion:
@@ -759,9 +760,9 @@ async def export_section(
         doc = DocxDocument()
         doc.add_heading(section.section_title, level=1)
         if case_info.get("title"):
-            doc.add_paragraph(f"案件名称：{case_info['title']}")
+            doc.add_paragraph(f"审计项目名称：{case_info['title']}")
         if case_info.get("type"):
-            doc.add_paragraph(f"案件类型：{case_info['type']}")
+            doc.add_paragraph(f"审计项目类型：{audit_case_type_label(case_info['type'])}")
         doc.add_paragraph(f"生成时间：{now}")
         doc.add_paragraph(f"创建时间：{local_display(section.created_at)}    修改时间：{local_display(section.updated_at)}")
         if section.criterion:
@@ -782,9 +783,9 @@ async def export_section(
     else:  # txt
         lines = [section.section_title]
         if case_info.get("title"):
-            lines.append(f"案件名称：{case_info['title']}")
+            lines.append(f"审计项目名称：{case_info['title']}")
         if case_info.get("type"):
-            lines.append(f"案件类型：{case_info['type']}")
+            lines.append(f"审计项目类型：{audit_case_type_label(case_info['type'])}")
         lines.append(f"生成时间：{now}")
         lines.append(f"创建时间：{local_display(section.created_at)}  |  修改时间：{local_display(section.updated_at)}")
         lines.append("=" * 40)
@@ -905,7 +906,7 @@ async def slot_input(section_id: uuid.UUID, body: ClientInputRequest, current_us
 
 @router.post("/cases/{case_id}/rfi/generate")
 async def generate_rfi(case_id: uuid.UUID, rfi_text: str, current_user: CurrentUser, db: DB):
-    """Generate RFI/RFE response letter using AI."""
+    """Generate an audit information request response using AI."""
     from app.models.fact import Fact, FactStatus
 
     await _ensure_case_access(db, case_id, current_user)

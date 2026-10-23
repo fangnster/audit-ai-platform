@@ -1,3 +1,4 @@
+import { auditTypeLabel } from '../utils/auditLabels'
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
@@ -53,6 +54,10 @@ type UserSortBy = 'name' | 'firm_name' | 'is_system_admin' | 'is_active' | 'case
 type CaseSortBy = 'title' | 'case_type' | 'status' | 'lead_lawyer' | 'updated_at'
 
 const ADMIN_PAGE_SIZE = 20
+const statusLabelKeys: Record<string, string> = {
+  intake: 'intake', active: 'active', fact_extraction: 'factExtraction', drafting: 'drafting',
+  review: 'review', submitted: 'submitted', approved: 'approved',
+}
 
 const statusColors: Record<string, string> = {
   intake: 'badge-gray',
@@ -138,7 +143,7 @@ function AdminPagination({
 }
 
 export default function AdminPage() {
-  const { i18n } = useTranslation()
+  const { t, i18n } = useTranslation()
   const currentUser = useAuthStore((s) => s.user)
   const queryClient = useQueryClient()
   const [queryInput, setQueryInput] = useState('')
@@ -196,8 +201,8 @@ export default function AdminPage() {
   })
   const adminCaseMeta = (item?: AdminCase | null) => notificationHistoryMeta({
     category: 'case_task',
-    type_name: item?.case_type || '案件',
-    object_name: item?.title || '案件',
+    type_name: item?.case_type || '审计项目',
+    object_name: item?.title || '审计项目',
     case_title: item?.title,
     case_type: item?.case_type,
   })
@@ -231,9 +236,9 @@ export default function AdminPage() {
       queryClient.invalidateQueries({ queryKey: ['admin-cases'] })
       queryClient.invalidateQueries({ queryKey: ['admin-users'] })
       const errors = res.data?.storage_errors?.length || 0
-      toast.success(errors ? `案件已删除，${errors} 个文件清理告警` : '案件及关联文件已删除', adminCaseMeta(findAdminCase(id)))
+      toast.success(errors ? `审计项目已删除，${errors} 个文件清理告警` : '审计项目及关联文件已删除', adminCaseMeta(findAdminCase(id)))
     },
-    onError: (err: any, id) => toast.error(err?.response?.data?.detail || '删除案件失败', adminCaseMeta(findAdminCase(id))),
+    onError: (err: any, id) => toast.error(err?.response?.data?.detail || '删除审计项目失败', adminCaseMeta(findAdminCase(id))),
   })
   const deleteUserMutation = useMutation({
     mutationFn: (id: string) => adminApi.deleteUser(id),
@@ -260,7 +265,7 @@ export default function AdminPage() {
     { label: '用户总数', value: overview?.total_users ?? 0, icon: Users, color: 'var(--accent-primary)' },
     { label: '启用用户', value: overview?.active_users ?? 0, icon: CheckCircle2, color: 'var(--success)' },
     { label: '系统管理员', value: overview?.system_admins ?? 0, icon: ShieldCheck, color: 'var(--gold)' },
-    { label: '案件总数', value: overview?.total_cases ?? 0, icon: FolderOpen, color: 'var(--warning)' },
+    { label: '审计项目总数', value: overview?.total_cases ?? 0, icon: FolderOpen, color: 'var(--warning)' },
     { label: '文档总数', value: overview?.total_documents ?? 0, icon: FileText, color: 'var(--accent-primary)' },
     { label: '待处理任务', value: overview?.pending_tasks ?? 0, icon: RefreshCw, color: 'var(--error)' },
   ]
@@ -324,12 +329,12 @@ export default function AdminPage() {
     updateUserMutation.mutate({ id: user.id, patch: { is_system_admin: !user.is_system_admin } })
   }
   const deleteCase = (item: AdminCase) => {
-    const confirmed = window.confirm(`永久删除案件「${item.title}」？\n\n该操作会删除案件下所有事实、文案、任务、上传文档和关联文件，无法恢复。`)
+    const confirmed = window.confirm(`永久删除审计项目「${item.title}」？\n\n该操作会删除审计项目下所有事实、审计底稿、任务、上传文档和关联文件，无法恢复。`)
     if (!confirmed) return
     deleteCaseMutation.mutate(item.id)
   }
   const deleteUser = (item: AdminUser) => {
-    const confirmed = window.confirm(`永久删除用户「${item.name}」？\n\n该操作会删除该用户负责的案件、个人知识库、上传文档和关联文件，无法恢复。`)
+    const confirmed = window.confirm(`永久删除用户「${item.name}」？\n\n该操作会删除该用户负责的审计项目、个人知识库、上传文档和关联文件，无法恢复。`)
     if (!confirmed) return
     deleteUserMutation.mutate(item.id)
   }
@@ -343,7 +348,7 @@ export default function AdminPage() {
           <ShieldCheck size={22} /> 系统后台
         </h1>
         <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginTop: 4 }}>
-          全局用户、案件和任务状态
+          全局用户、审计项目和任务状态
         </p>
       </div>
 
@@ -367,7 +372,7 @@ export default function AdminPage() {
 
       <div className="card" style={{ marginBottom: 24 }}>
         <div className="card-header">
-          <h2 style={{ fontSize: '1rem', fontWeight: 600 }}>案件管理</h2>
+          <h2 style={{ fontSize: '1rem', fontWeight: 600 }}>审计项目管理</h2>
           <form onSubmit={handleCaseSearch} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>
               活跃 {overview?.active_cases ?? 0} / 回收站 {overview?.deleted_cases ?? 0}
@@ -378,7 +383,7 @@ export default function AdminPage() {
                 className="form-input"
                 value={caseQueryInput}
                 onChange={(e) => setCaseQueryInput(e.target.value)}
-                placeholder="案件或负责人"
+                placeholder="审计项目或负责人"
                 style={{ width: 220, height: 34, paddingLeft: 32 }}
               />
             </div>
@@ -389,13 +394,13 @@ export default function AdminPage() {
           {casesLoading ? (
             <div style={{ padding: 32, textAlign: 'center' }}><span className="spinner" /></div>
           ) : cases.length === 0 ? (
-            <div style={{ padding: 32, color: 'var(--text-muted)', textAlign: 'center' }}>暂无案件</div>
+            <div style={{ padding: 32, color: 'var(--text-muted)', textAlign: 'center' }}>暂无审计项目</div>
           ) : (
             <>
               <table className="table">
                 <thead>
                   <tr>
-                    <th><SortHeader label="案件" sortBy="title" activeSortBy={caseSortBy} sortOrder={caseSortOrder} onSort={handleCaseSort} /></th>
+                    <th><SortHeader label="审计项目" sortBy="title" activeSortBy={caseSortBy} sortOrder={caseSortOrder} onSort={handleCaseSort} /></th>
                     <th><SortHeader label="类型" sortBy="case_type" activeSortBy={caseSortBy} sortOrder={caseSortOrder} onSort={handleCaseSort} /></th>
                     <th><SortHeader label="状态" sortBy="status" activeSortBy={caseSortBy} sortOrder={caseSortOrder} onSort={handleCaseSort} /></th>
                     <th><SortHeader label="负责人" sortBy="lead_lawyer" activeSortBy={caseSortBy} sortOrder={caseSortOrder} onSort={handleCaseSort} /></th>
@@ -407,8 +412,8 @@ export default function AdminPage() {
                   {cases.map((item) => (
                     <tr key={item.id}>
                       <td style={{ fontWeight: 500 }}>{item.title}</td>
-                      <td><span className="badge badge-blue">{item.case_type}</span></td>
-                      <td><span className={`badge ${item.is_deleted ? 'badge-red' : statusColors[item.status] ?? 'badge-gray'}`}>{item.is_deleted ? '已删除' : item.status}</span></td>
+                      <td><span className="badge badge-blue">{auditTypeLabel(item.case_type, i18n.language)}</span></td>
+                      <td><span className={`badge ${item.is_deleted ? 'badge-red' : statusColors[item.status] ?? 'badge-gray'}`}>{item.is_deleted ? (i18n.language.startsWith('zh') ? '已删除' : 'Deleted') : statusLabelKeys[item.status] ? t(statusLabelKeys[item.status]) : item.status}</span></td>
                       <td>
                         <div style={{ fontWeight: 500 }}>{item.lead_lawyer_name}</div>
                         <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{item.lead_lawyer_email}</div>
@@ -475,10 +480,10 @@ export default function AdminPage() {
                 <thead>
                   <tr>
                     <th><SortHeader label="用户" sortBy="name" activeSortBy={userSortBy} sortOrder={userSortOrder} onSort={handleUserSort} /></th>
-                    <th><SortHeader label="公司/律所" sortBy="firm_name" activeSortBy={userSortBy} sortOrder={userSortOrder} onSort={handleUserSort} /></th>
+                    <th><SortHeader label="公司/审计机构" sortBy="firm_name" activeSortBy={userSortBy} sortOrder={userSortOrder} onSort={handleUserSort} /></th>
                     <th><SortHeader label="角色" sortBy="is_system_admin" activeSortBy={userSortBy} sortOrder={userSortOrder} onSort={handleUserSort} /></th>
                     <th><SortHeader label="状态" sortBy="is_active" activeSortBy={userSortBy} sortOrder={userSortOrder} onSort={handleUserSort} /></th>
-                    <th><SortHeader label="案件数" sortBy="case_count" activeSortBy={userSortBy} sortOrder={userSortOrder} onSort={handleUserSort} /></th>
+                    <th><SortHeader label="审计项目数" sortBy="case_count" activeSortBy={userSortBy} sortOrder={userSortOrder} onSort={handleUserSort} /></th>
                     <th><SortHeader label="注册时间" sortBy="created_at" activeSortBy={userSortBy} sortOrder={userSortOrder} onSort={handleUserSort} /></th>
                     <th></th>
                   </tr>

@@ -112,7 +112,7 @@ async def update_my_org(body: UpdateOrgRequest, current_user: CurrentUser, db: D
     # TODO(org): only the display name is editable while org/law-firm business logic is parked.
     name = body.name.strip()
     if not name:
-        raise HTTPException(status_code=422, detail="公司/律所名称不能为空")
+        raise HTTPException(status_code=422, detail="公司/事务所名称不能为空")
     org = await get_or_create_todo_org(db, current_user)
     org.name = name
     await db.commit()

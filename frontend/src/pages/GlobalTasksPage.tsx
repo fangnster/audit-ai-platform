@@ -1,3 +1,4 @@
+import { auditTypeLabel } from '../utils/auditLabels'
 import { useState } from 'react'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
@@ -37,7 +38,7 @@ const taskTypeLabelKey: Record<string, string> = {
 const taskTime = (task: Task) => new Date(task.updated_at || task.created_at || 0).getTime()
 
 export default function GlobalTasksPage() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
 
   // Fetch all cases, then fetch case work items for each.
@@ -163,7 +164,7 @@ function CaseTaskSection({ caseInfo, tasks }: { caseInfo: CaseBasic; tasks: Task
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <FolderOpen size={16} color="var(--accent-primary)" />
           <span style={{ fontWeight: 600 }}>{caseInfo.title}</span>
-          <span className="badge badge-blue">{caseInfo.case_type}</span>
+          <span className="badge badge-blue">{auditTypeLabel(caseInfo.case_type, i18n.language)}</span>
         </div>
         <Link
           to={`/cases/${caseInfo.id}`}

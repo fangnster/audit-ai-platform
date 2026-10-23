@@ -1,3 +1,4 @@
+import { auditFactCategoryLabel } from '../utils/auditLabels'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
@@ -481,7 +482,7 @@ export default function FactsPage() {
           <button key={cat} className={`btn btn-sm ${catFilter === cat ? 'btn-primary' : 'btn-ghost'}`}
             onClick={() => { setCatFilter(cat); setPage(1) }}
             style={catFilter === cat ? {} : { borderColor: CAT_COLORS[cat] + '40', color: CAT_COLORS[cat] }}>
-            {cat} ({displayFacts.filter(f => f.category === cat).length})
+            {auditFactCategoryLabel(cat, i18n.language)} ({displayFacts.filter(f => f.category === cat).length})
           </button>
         ))}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
@@ -515,7 +516,7 @@ export default function FactsPage() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     <span className="badge badge-blue" style={{ background: `${CAT_COLORS[f.category]}20`, color: CAT_COLORS[f.category] }}>
-                      {f.category}
+                      {auditFactCategoryLabel(f.category, i18n.language)}
                     </span>
                     {statusBadge(f.status)}
                     <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
@@ -638,7 +639,7 @@ export default function FactsPage() {
         <AiWorkModal
           icon={<Wand2 size={18} />}
           title={t('disputeReparseTitle')}
-          subtitle={disputeFact?.category}
+          subtitle={auditFactCategoryLabel(disputeFact?.category || '', i18n.language)}
           onClose={closeReparseDialog}
           closeDisabled={disputeMutation.isPending}
           closeTitle={t('close')}

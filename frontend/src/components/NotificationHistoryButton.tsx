@@ -1,3 +1,4 @@
+import { auditTypeLabel, auditFactCategoryLabel } from '../utils/auditLabels'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { AlertCircle, Bell, CheckCircle2, Search, Trash2, X } from 'lucide-react'
@@ -23,19 +24,19 @@ function sourceLabel(path: string, language: string) {
   const zh = language.startsWith('zh')
   const normalized = path.split('?')[0]
   if (!normalized || normalized === '/') return zh ? '仪表盘' : 'Dashboard'
-  if (normalized === '/cases') return zh ? '案件列表' : 'Case List'
+  if (normalized === '/cases') return zh ? '审计项目列表' : 'Audit Engagement List'
   if (normalized === '/knowledge') return zh ? '知识库' : 'Knowledge'
   if (normalized === '/tasks') return zh ? '任务中心' : 'Task Center'
   if (normalized === '/admin') return zh ? '系统后台' : 'Admin'
   if (normalized === '/settings') return zh ? '设置' : 'Settings'
   if (normalized === '/login') return zh ? '登录页' : 'Login'
   if (normalized === '/register') return zh ? '注册页' : 'Register'
-  if (/^\/cases\/[^/]+\/documents/.test(normalized)) return zh ? '案件文档' : 'Case Documents'
-  if (/^\/cases\/[^/]+\/facts/.test(normalized)) return zh ? '案件事实' : 'Case Facts'
-  if (/^\/cases\/[^/]+\/drafts/.test(normalized)) return zh ? '文案生成' : 'Draft Generation'
-  if (/^\/cases\/[^/]+\/tasks/.test(normalized)) return zh ? '案件任务' : 'Case Tasks'
+  if (/^\/cases\/[^/]+\/documents/.test(normalized)) return zh ? '审计项目文档' : 'Audit Engagement Documents'
+  if (/^\/cases\/[^/]+\/facts/.test(normalized)) return zh ? '审计项目事实' : 'Audit Engagement Facts'
+  if (/^\/cases\/[^/]+\/drafts/.test(normalized)) return zh ? '审计底稿生成' : 'Audit Draft Generation'
+  if (/^\/cases\/[^/]+\/tasks/.test(normalized)) return zh ? '审计项目任务' : 'Audit Engagement Tasks'
   if (/^\/cases\/[^/]+\/agent-runs/.test(normalized)) return zh ? 'Agent 运行记录' : 'Agent Run Log'
-  if (/^\/cases\/[^/]+/.test(normalized)) return zh ? '案件详情' : 'Case Detail'
+  if (/^\/cases\/[^/]+/.test(normalized)) return zh ? '审计项目详情' : 'Audit Engagement Detail'
   return zh ? '当前页面' : 'Current Page'
 }
 
@@ -45,7 +46,7 @@ function shortText(value: string, maxLength = 90) {
 }
 
 function typeName(item: NotificationHistoryItem, language: string) {
-  return item.meta?.type_name?.trim() || sourceLabel(item.path, language)
+  return auditFactCategoryLabel(auditTypeLabel(item.meta?.type_name?.trim() || sourceLabel(item.path, language), language), language)
 }
 
 function objectName(item: NotificationHistoryItem, language: string) {
@@ -66,10 +67,10 @@ function objectName(item: NotificationHistoryItem, language: string) {
   return sourceLabel(item.path, language)
 }
 
-function caseContext(item: NotificationHistoryItem) {
+function caseContext(item: NotificationHistoryItem, language: string) {
   const caseTitle = item.meta?.case_title?.trim()
   const caseType = item.meta?.case_type?.trim()
-  return [caseTitle ? shortText(caseTitle, 80) : '', caseType || ''].filter(Boolean).join(' · ')
+  return [caseTitle ? shortText(caseTitle, 80) : '', auditTypeLabel(caseType || '', language)].filter(Boolean).join(' · ')
 }
 
 function caseTitle(item: NotificationHistoryItem) {
@@ -102,7 +103,7 @@ export default function NotificationHistoryButton() {
     return items.filter(item => {
       if (filter !== 'all' && item.type !== filter) return false
       if (!term) return true
-      return `${item.message} ${notificationCategoryLabel(item.category, i18n.language)} ${caseContext(item)} ${typeName(item, i18n.language)} ${objectName(item, i18n.language)}`.toLowerCase().includes(term)
+      return `${item.message} ${notificationCategoryLabel(item.category, i18n.language)} ${caseContext(item, i18n.language)} ${typeName(item, i18n.language)} ${objectName(item, i18n.language)}`.toLowerCase().includes(term)
     })
   }, [filter, i18n.language, items, query])
 
@@ -182,7 +183,7 @@ export default function NotificationHistoryButton() {
                     {caseType(item) && (
                       <div>
                         <span>{t('caseType')}</span>
-                        <strong>{caseType(item)}</strong>
+                        <strong>{auditTypeLabel(caseType(item), i18n.language)}</strong>
                       </div>
                     )}
                     <div>

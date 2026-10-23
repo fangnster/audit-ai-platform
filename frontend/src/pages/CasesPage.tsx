@@ -1,3 +1,4 @@
+import { auditTypeLabel } from '../utils/auditLabels'
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
@@ -262,7 +263,7 @@ export default function CasesPage() {
               {cases.map((c: CaseItem) => (
                 <tr key={c.id}>
                   <td style={{ fontWeight: 500 }}>{c.title}</td>
-                  <td><span className="badge badge-blue">{c.case_type}</span></td>
+                  <td><span className="badge badge-blue">{auditTypeLabel(c.case_type, i18n.language)}</span></td>
                   <td><span className={`badge ${statusColors[c.status] ?? 'badge-gray'}`}>{statusLabels[c.status] ? t(statusLabels[c.status]) : c.status}</span></td>
                   <td style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
                     {formatLocalDateTime(c.updated_at || c.created_at, i18n.language)}
@@ -315,27 +316,27 @@ export default function CasesPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div className="form-group">
               <label className="form-label">{t('caseTitle')}</label>
-              <input className="form-input" value={title} onChange={e => setTitle(e.target.value)} placeholder="张三 EB-1A 申请" required />
+              <input className="form-input" value={title} onChange={e => setTitle(e.target.value)} placeholder="示例公司年度财务审计" required />
             </div>
             <div className="form-group">
               <label className="form-label">{t('caseType')}</label>
               <select className="form-select" value={caseType} onChange={e => setCaseType(e.target.value)}>
-                {CASE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                {CASE_TYPES.map(type => <option key={type} value={type}>{auditTypeLabel(type, i18n.language)}</option>)}
               </select>
             </div>
             <div className="form-group">
-              <label className="form-label">客户姓名</label>
-              <input className="form-input" value={clientName} onChange={e => setClientName(e.target.value)} placeholder="客户姓名（选填）" />
+              <label className="form-label">被审计单位名称</label>
+              <input className="form-input" value={clientName} onChange={e => setClientName(e.target.value)} placeholder="被审计单位名称（选填）" />
             </div>
             <div className="form-group">
-              <label className="form-label">客户邮箱</label>
-              <input className="form-input" type="email" value={clientEmail} onChange={e => setClientEmail(e.target.value)} placeholder="client@example.com" />
+              <label className="form-label">被审计单位邮箱</label>
+              <input className="form-input" type="email" value={clientEmail} onChange={e => setClientEmail(e.target.value)} placeholder="contact@example.com" />
             </div>
             <div className="form-group">
-              <label className="form-label">客户电话</label>
+              <label className="form-label">被审计单位电话</label>
               <input className="form-input" value={clientPhone} onChange={e => setClientPhone(e.target.value)} placeholder="+1 555 000 0000" />
               <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 4 }}>
-                客户邮箱或电话至少填写一个
+                被审计单位邮箱或电话至少填写一个
               </span>
             </div>
             <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
@@ -359,7 +360,7 @@ export default function CasesPage() {
             <div className="form-group">
               <label className="form-label">{t('caseType')}</label>
               <select className="form-select" value={editCaseType} onChange={e => setEditCaseType(e.target.value)}>
-                {CASE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                {CASE_TYPES.map(type => <option key={type} value={type}>{auditTypeLabel(type, i18n.language)}</option>)}
               </select>
             </div>
             <div className="form-group">
@@ -369,18 +370,18 @@ export default function CasesPage() {
               </select>
             </div>
             <div className="form-group">
-              <label className="form-label">客户姓名</label>
-              <input className="form-input" value={editClientName} onChange={e => setEditClientName(e.target.value)} placeholder="客户姓名（选填）" />
+              <label className="form-label">被审计单位名称</label>
+              <input className="form-input" value={editClientName} onChange={e => setEditClientName(e.target.value)} placeholder="被审计单位名称（选填）" />
             </div>
             <div className="form-group">
-              <label className="form-label">客户邮箱</label>
-              <input className="form-input" type="email" value={editClientEmail} onChange={e => setEditClientEmail(e.target.value)} placeholder="client@example.com" />
+              <label className="form-label">被审计单位邮箱</label>
+              <input className="form-input" type="email" value={editClientEmail} onChange={e => setEditClientEmail(e.target.value)} placeholder="contact@example.com" />
             </div>
             <div className="form-group">
-              <label className="form-label">客户电话</label>
+              <label className="form-label">被审计单位电话</label>
               <input className="form-input" value={editClientPhone} onChange={e => setEditClientPhone(e.target.value)} placeholder="+1 555 000 0000" />
               <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 4 }}>
-                客户邮箱或电话至少保留一个
+                被审计单位邮箱或电话至少保留一个
               </span>
             </div>
             <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>

@@ -39,3 +39,9 @@ Thumbs.db
 
 # Storage
 uploads/
+
+# Local Git and source archives (kept off GitHub)
+.local-backups/
+
+# Generated evaluation artifacts
+backend/test_outputs/

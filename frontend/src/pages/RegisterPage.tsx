@@ -44,7 +44,7 @@ export default function RegisterPage() {
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!orgName.trim()) {
-      toast.error('请填写律所或公司名称', registerMeta())
+      toast.error('请填写审计机构或公司名称', registerMeta())
       return
     }
     if (password.length < 8) {
@@ -89,21 +89,21 @@ export default function RegisterPage() {
             <label className="form-label">{t('name')}</label>
             <div style={{ position: 'relative' }}>
               <User size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-              <input ref={nameRef} className="form-input" style={{ paddingLeft: 38 }} type="text" name="reg-name" autoComplete="new-password" value={name} onChange={(e) => setName(e.target.value)} placeholder="张律师" required />
+              <input ref={nameRef} className="form-input" style={{ paddingLeft: 38 }} type="text" name="reg-name" autoComplete="new-password" value={name} onChange={(e) => setName(e.target.value)} placeholder="张审计师" required />
             </div>
           </div>
           <div className="form-group">
             <label className="form-label">{t('email')}</label>
             <div style={{ position: 'relative' }}>
               <Mail size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-              <input ref={emailRef} className="form-input" style={{ paddingLeft: 38 }} type="email" name="reg-email" autoComplete="new-password" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@lawfirm.com" required />
+              <input ref={emailRef} className="form-input" style={{ paddingLeft: 38 }} type="email" name="reg-email" autoComplete="new-password" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@auditfirm.com" required />
             </div>
           </div>
           <div className="form-group">
-            <label className="form-label">律所/公司名称</label>
+            <label className="form-label">审计机构/公司名称</label>
             <div style={{ position: 'relative' }}>
               <Building2 size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-              <input ref={orgRef} className="form-input" style={{ paddingLeft: 38 }} type="text" name="reg-org" autoComplete="new-password" value={orgName} onChange={(e) => setOrgName(e.target.value)} placeholder="XX 律师事务所" required />
+              <input ref={orgRef} className="form-input" style={{ paddingLeft: 38 }} type="text" name="reg-org" autoComplete="new-password" value={orgName} onChange={(e) => setOrgName(e.target.value)} placeholder="XX 审计机构" required />
             </div>
             <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: 4 }}>
               仅用于页面展示，不参与权限、共享或业务流程

@@ -52,10 +52,10 @@ class FakeLLM:
         self.prompt = prompt
         self.system = system
         self.max_tokens = max_tokens
-        return """# EB-1A Petition Letter for Dr. Lin
+        return """# Financial Audit Evidence Summary
 
-## Awards and Original Contributions
-The record combines the national award certificate, recommendation letter, patent file, and citation report to establish sustained acclaim."""
+## Financial Statements and Contracts
+The draft combines financial statements, external confirmation, and contract evidence for auditor review."""
 
 
 def make_section(
@@ -139,7 +139,7 @@ def test_orchestrator_selects_cross_document_facts_for_one_argument():
         {
             "id": "fact-award",
             "category": "award",
-            "content": "The beneficiary won a nationally recognized research award.",
+            "content": "The financial statements report revenue of USD 1 million for 2025.",
             "source_document_id": "doc-award",
             "structured_data": {"document_name": "award_certificate.pdf"},
             "confidence_score": 0.96,
@@ -147,7 +147,7 @@ def test_orchestrator_selects_cross_document_facts_for_one_argument():
         {
             "id": "fact-evidence",
             "category": "evidence",
-            "content": "A recommendation letter explains that the award is granted to top researchers.",
+            "content": "An external confirmation supports the reported revenue balance.",
             "source_document_id": "doc-letter",
             "structured_data": {"document_name": "recommendation_letter.pdf"},
             "confidence_score": 0.91,
@@ -174,15 +174,15 @@ async def test_generate_draft_prompt_contains_cross_document_evidence():
         {
             "id": "fact-award",
             "category": "award",
-            "content": "Dr. Lin won the National Biomedical Innovation Award in 2024.",
+            "content": "The financial statements report revenue of USD 1 million for 2025.",
             "source_document_id": "doc-award",
-            "structured_data": {"document_name": "award_certificate.pdf", "quote": "National Biomedical Innovation Award"},
+            "structured_data": {"document_name": "award_certificate.pdf", "quote": "Revenue: USD 1 million"},
             "confidence_score": 0.98,
         },
         {
             "id": "fact-letter",
             "category": "evidence",
-            "content": "The recommender states the award is given to fewer than 1% of researchers in the field.",
+            "content": "An external confirmation supports the reported revenue balance.",
             "source_document_id": "doc-letter",
             "structured_data": {"document_name": "expert_recommendation.pdf"},
             "confidence_score": 0.94,
@@ -190,7 +190,7 @@ async def test_generate_draft_prompt_contains_cross_document_evidence():
         {
             "id": "fact-patent",
             "category": "patent",
-            "content": "The patented diagnostic workflow has been adopted by three hospital systems.",
+            "content": "A signed customer contract supports USD 300,000 of recorded revenue.",
             "source_document_id": "doc-patent",
             "structured_data": {"document_name": "patent_record.pdf"},
             "confidence_score": 0.93,
@@ -202,17 +202,22 @@ async def test_generate_draft_prompt_contains_cross_document_evidence():
         facts=facts,
         case_type="EB1A",
         criteria=["criterion_1", "criterion_5"],
-        draft_title="EB-1A Petition Letter for Dr. Lin",
+        draft_title="Financial Audit Evidence Summary",
     )
 
-    assert content.startswith("# EB-1A Petition Letter")
-    assert "LEGAL ARGUMENT CONTEXT" in llm.prompt
+    assert content.startswith("# Financial Audit Evidence Summary")
+    assert "AUDIT ANALYSIS CONTEXT" in llm.prompt
+    assert "AUDIT TYPE BACKGROUND: Financial Audit / 财务审计" in llm.prompt
+    assert "audit" in llm.system.lower()
+    assert "immigration" not in llm.system.lower()
+    assert "USCIS" not in llm.prompt
+    assert "require auditor approval" in llm.prompt
     assert "CROSS-DOCUMENT EVIDENCE ORGANIZATION" in llm.prompt
-    assert "RELEVANT LEGAL CRITERIA" in llm.prompt
+    assert "RELEVANT AUDIT OBJECTIVES" in llm.prompt
     assert "award_certificate.pdf" in llm.prompt
     assert "expert_recommendation.pdf" in llm.prompt
     assert "patent_record.pdf" in llm.prompt
-    plan_json = llm.prompt.split("CROSS-DOCUMENT EVIDENCE ORGANIZATION:\n", 1)[1].split("\n\nRELEVANT LEGAL CRITERIA", 1)[0]
+    plan_json = llm.prompt.split("CROSS-DOCUMENT EVIDENCE ORGANIZATION:\n", 1)[1].split("\n\nRELEVANT AUDIT OBJECTIVES", 1)[0]
     plan = json.loads(plan_json)
     all_sources = {
         evidence["source"]["document_id"]
@@ -223,7 +228,7 @@ async def test_generate_draft_prompt_contains_cross_document_evidence():
 
 
 @pytest.mark.asyncio
-async def test_generate_draft_prompt_prioritizes_lawyer_custom_format():
+async def test_generate_draft_prompt_prioritizes_auditor_custom_format():
     facts = [
         {
             "id": "fact-summary",
@@ -234,35 +239,35 @@ async def test_generate_draft_prompt_prioritizes_lawyer_custom_format():
             "confidence_score": 0.95,
         },
     ]
-    custom_instruction = "请生成中文客户背景摘要，章节为：核心优势、关键事实、证据缺口、后续策略。不要写申请信。\n- 按用户指定章节逐项展开；只有明确要求法律要件时才对应法定标准。"
+    custom_instruction = "请生成中文审计背景摘要，章节为：业务概况、关键事实、证据缺口、后续计划。不要写正式审计报告。\n- 按用户指定章节逐项展开；只有明确要求审计要件时才对应审计标准。"
 
     llm = FakeLLM()
     await DraftGenerationAgent(llm=llm).generate_draft(
         facts=facts,
         case_type="EB1A",
-        draft_title="客户背景摘要",
+        draft_title="审计背景摘要",
         user_prompt=custom_instruction,
         strategy="criterion",
         knowledge_refs=[
             {
-                "title": "客户摘要模板",
+                "title": "审计摘要模板",
                 "type": "document_template",
                 "content": "使用短段落和项目符号列出背景、证据、风险和下一步。",
             }
         ],
     )
 
-    assert "LAWYER'S REQUIRED FORMAT AND CONTENT INSTRUCTIONS" in llm.prompt
-    assert "客户背景摘要" in llm.prompt
+    assert "AUDITOR'S REQUIRED FORMAT AND CONTENT INSTRUCTIONS" in llm.prompt
+    assert "审计背景摘要" in llm.prompt
     assert custom_instruction in llm.prompt
-    assert "客户摘要模板" in llm.prompt
+    assert "审计摘要模板" in llm.prompt
     assert "Do not default to any fixed legacy format" in llm.prompt
-    assert "Do not use a USCIS filing-letter structure" in llm.prompt
+    assert "Do not impose a fixed audit report" in llm.prompt
     assert "CUSTOM DOCUMENT ORGANIZATION" in llm.prompt
-    assert "No legal criteria context was injected" in llm.prompt
-    assert "LEGAL ARGUMENT CONTEXT" not in llm.prompt
+    assert "No audit criteria context was injected" in llm.prompt
+    assert "AUDIT ANALYSIS CONTEXT" not in llm.prompt
     assert "CROSS-DOCUMENT EVIDENCE ORGANIZATION" not in llm.prompt
-    assert "RELEVANT LEGAL CRITERIA" not in llm.prompt
+    assert "RELEVANT AUDIT OBJECTIVES" not in llm.prompt
     assert "petition letter" not in llm.prompt.lower()
     assert "petition letter" not in llm.system.lower()
 
@@ -293,7 +298,7 @@ async def test_generate_draft_compacts_large_inputs_for_remote_llm():
     await DraftGenerationAgent(llm=llm).generate_draft(
         facts=facts,
         case_type="EB1A",
-        draft_title="客户背景摘要",
+        draft_title="审计背景摘要",
         user_prompt="请生成中文摘要，不要写申请信。",
         knowledge_refs=knowledge_refs,
     )
@@ -348,8 +353,8 @@ async def test_export_section_txt_returns_title_and_content():
     text = response.body.decode("utf-8")
 
     assert "客户陈述" in text
-    assert "案件名称：张三 EB-1A 案件" in text
-    assert "案件类型：EB1A" in text
+    assert "审计项目名称：张三 EB-1A 案件" in text
+    assert "审计项目类型：Financial Audit / 财务审计" in text
     assert "生成时间：" in text
     assert "Single section export body." in text
     assert response.headers["content-length"] == str(len(response.body))

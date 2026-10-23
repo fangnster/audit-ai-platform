@@ -124,7 +124,7 @@ export default function LoginPage() {
                 autoComplete="new-password"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@lawfirm.com"
+                placeholder="you@auditfirm.com"
                 required
               />
             </div>

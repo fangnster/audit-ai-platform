@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 from app.config import settings
+from app.audit_terms import audit_case_type_label
 from app.llm.provider import LLMService, strip_think_tags
 
 logger = logging.getLogger(__name__)
@@ -163,43 +164,44 @@ def _extract_image_ocr(file_path: str) -> str:
 
 # ── Fact extraction via LLM ───────────────────────────────────────────────────
 
-FACT_EXTRACTION_SYSTEM = """You are an expert immigration lawyer assistant specializing in EB-1A, EB-1B, NIW, and O-1A petitions.
-Extract verifiable, evidence-backed facts from the provided document. Prefer concise facts that a lawyer can verify and use.
-For resumes, CVs, biographies, personal profiles, and custom evidence packets, do not discard objective background entries merely because they look like résumé history.
-Classify each fact into one of: award, original_contribution, patent, publication, citation, employment, media, membership, education, salary, reference_letter, other.
+FACT_EXTRACTION_SYSTEM = """You are a careful audit evidence extraction assistant.
+Extract verifiable, source-backed facts an auditor can review and use. Preserve amounts, currencies, dates, reporting periods, entity names, document identifiers, controls, transactions, exceptions, and source locations.
+Separate observed evidence from assertions or estimates; never invent procedures, test results, compliance, or an issued audit opinion. Flag missing or conflicting evidence for auditor review.
+The following category IDs are legacy storage keys with audit meanings: award=financial statements; original_contribution=internal controls; patent=contracts; publication=accounting records; citation=transaction details; employment=payroll/personnel; media=external information; membership=policies; education=training; salary=compensation; reference_letter=confirmations/representations; other=other audit evidence.
 Return ONLY a valid JSON array — no markdown, no explanation."""
 
 DOC_TYPE_GUIDANCE = {
-    "award": "Focus on award name, level, granting organization, selection criteria, date, competitiveness, and field recognition.",
-    "original_contribution": "Focus on the original contribution, novelty, adoption/use, measurable impact, citations, patents/products, independent validation, and field significance.",
-    "patent": "Focus on patent title, number, inventors, jurisdiction, filing/grant dates, claims, commercialization, adoption, and technical impact.",
-    "publication": "Focus on publication title, venue, date, authorship role, journal/conference standing, citations, and scholarly impact.",
-    "citation": "Focus on citation counts, citing sources, benchmark comparisons, and evidence that others rely on the work.",
-    "employment": "Focus on role, employer reputation, dates, critical duties, leadership, business/technical outcomes, and measurable impact.",
-    "media": "Focus on outlet name, publication date, audience/reputation, subject of coverage, and why the coverage indicates recognition.",
-    "membership": "Focus on organization, membership criteria, selection evidence, date, and whether outstanding achievement is required.",
-    "reference_letter": "Focus on the recommender identity, basis of knowledge, independent validation, specific claims, and cited evidence.",
-    "resume": "Treat this as a resume/CV/profile, not as a narrative petition exhibit. Extract every objective, verifiable career fact: education, degrees, employers, roles, dates, leadership, publications, patents, awards, memberships, peer review, invited talks, projects, metrics, and impact. One fact per distinct resume entry; do not merge the whole resume into a summary and do not discard background history.",
-    "cv": "Treat this as a resume/CV/profile, not as a narrative petition exhibit. Extract every objective, verifiable career fact: education, degrees, employers, roles, dates, leadership, publications, patents, awards, memberships, peer review, invited talks, projects, metrics, and impact. One fact per distinct resume entry; do not merge the whole resume into a summary and do not discard background history.",
-    "rfi": "Focus on every USCIS concern, requested evidence, deadlines, and response themes.",
+    "award": "Focus on the entity, reporting period, statement line items, amounts, currencies, accounting basis, disclosures, and source pages.",
+    "original_contribution": "Focus on control objectives, owners, frequency, design, approvals, test evidence, exceptions, and remediation; distinguish descriptions from observed operation.",
+    "patent": "Focus on contract parties, identifiers, effective dates, terms, amounts, obligations, approvals, and supporting evidence.",
+    "publication": "Focus on accounting entries, accounts, reporting periods, amounts, currencies, reconciliations, and supporting records.",
+    "citation": "Focus on transaction identifiers, dates, counterparties, amounts, currencies, approvals, and source references.",
+    "employment": "Focus on employee roles, dates, payroll amounts, approvals, duties, and personnel controls.",
+    "media": "Focus on external source identity, publication date, reliability, relevant claims, and corroborating evidence.",
+    "membership": "Focus on policy requirements, versions, effective dates, responsible owners, exceptions, and compliance evidence.",
+    "reference_letter": "Focus on confirming party, response date, balances, assertions, scope limitations, differences, and corroboration.",
+    "petition_letter": "Focus on audit scope, period, procedures described, findings, limitations, recommendations, and review status. Do not treat draft conclusions as verified facts.",
+    "resume": "Treat this as a business process description or personnel profile. Extract objective steps, owners, dates, controls, approvals, systems, metrics, and source references. Preserve distinct factual entries without merging them into a broad summary.",
+    "cv": "Treat this as a personnel profile used in audit evidence. Preserve objective roles, dates, qualifications, responsibilities, and source references; do not replace distinct entries with a broad summary.",
+    "rfi": "Focus on each audit query, requested evidence, owner, deadline, response, unresolved difference, and follow-up action.",
 }
 
 CUSTOM_DOC_TYPE_GUIDANCE = (
-    "Treat this as a user-defined evidence packet. Extract all objective facts that can be verified from the file, "
-    "including resume/CV-style background, education, roles, publications, awards, memberships, projects, dates, names, numbers, and source-backed impact. "
-    "Do not reject verifiable background details simply because they are not already framed as legal arguments."
+    "Treat this as a user-defined audit evidence packet. Extract all objective, source-backed facts, "
+    "including entities, periods, amounts, currencies, transactions, controls, contracts, roles, dates, names, numbers, and exceptions. "
+    "Preserve source locations and flag uncertainty; do not turn missing evidence into an audit conclusion."
 )
 
-FACT_EXTRACTION_PROMPT_TEMPLATE = """Extract structured facts from the following document for an immigration petition.
+FACT_EXTRACTION_PROMPT_TEMPLATE = """Extract structured facts from the following document for an audit engagement.
 
-Extraction mode: high recall. The first pass should preserve potentially useful objective facts; do not make final legal-value decisions yet.
+Extraction mode: high recall. The first pass should preserve potentially useful objective facts; do not make final audit judgments yet.
 Document type hint: {doc_type}
 Document name: {document_name}
 Content scope: {content_scope}
 Global extraction budget: at most {global_max_facts} facts for the whole document.
 Document-specific extraction guidance: {doc_type_guidance}
-Case type: {case_type}
-Lawyer guidance:
+Audit type: {case_type}
+Auditor guidance:
 {lawyer_guidance}
 {resume_inventory}
 
@@ -222,25 +224,25 @@ Return a JSON array of facts. Each fact object must have:
   "confidence_score": 0.0-1.0
 }}
 
-Extract at most {max_facts} useful facts from this content scope. Avoid duplicates and unsupported claims. For resumes/CVs/profiles/custom types, objective background entries are useful facts when they include names, dates, roles, organizations, outputs, or metrics.
-Use structured_data.review_status = "candidate" for high-recall facts that should be lawyer-reviewed. Use structured_data.source with the section, heading, page marker, or short quote whenever possible.
+Extract at most {max_facts} useful facts from this content scope. Avoid duplicates and unsupported claims. For process descriptions/profiles/custom types, objective entries are useful facts when they include names, dates, roles, organizations, amounts, controls, or metrics.
+Use structured_data.review_status = "candidate" for high-recall facts that should be auditor-reviewed. Use structured_data.source with the section, heading, page marker, or short quote whenever possible.
 Output JSON array only."""
 
-FACT_EXTRACTION_FALLBACK_PROMPT_TEMPLATE = """The previous extraction returned no facts. Retry with a broader extraction scope for an immigration lawyer.
+FACT_EXTRACTION_FALLBACK_PROMPT_TEMPLATE = """The previous extraction returned no facts. Retry with a broader extraction scope for an auditor.
 
 Document type hint: {doc_type}
 Document name: {document_name}
 Content scope: {content_scope}
 Global extraction budget: at most {global_max_facts} facts for the whole document.
 Document-specific extraction guidance: {doc_type_guidance}
-Case type: {case_type}
-Lawyer guidance:
+Audit type: {case_type}
+Auditor guidance:
 {lawyer_guidance}
 {resume_inventory}
 
 Important retry rules:
 - Return facts even when the document is a resume, CV, biography, profile, certificate, letter, or custom evidence packet.
-- Extract objective entries such as education, employment, roles, dates, awards, publications, patents, memberships, service, reviews, projects, metrics, and named organizations.
+- Extract objective entries such as entity names, reporting periods, transactions, account balances, amounts, currencies, controls, approvals, exceptions, owners, and source locations.
 - One fact per distinct entry is acceptable.
 - For resumes/CVs, do not output one general career summary. Split entries into separate facts and preserve dates, organizations, titles, venues, numbers, and source section names.
 - Do not invent missing information; use "other" when the category is unclear.
@@ -256,7 +258,7 @@ FACT_GAP_CHECK_PROMPT_TEMPLATE = """Review the document content for missed objec
 Extraction mode: coverage gap check. Return only facts that are not already captured.
 Document type hint: {doc_type}
 Document name: {document_name}
-Case type: {case_type}
+Audit type: {case_type}
 Document-specific extraction guidance: {doc_type_guidance}
 Coverage diagnostics:
 {coverage_json}
@@ -269,7 +271,7 @@ Document content:
 
 Return ONLY a valid JSON array of additional fact objects with category, content, structured_data, and confidence_score.
 Rules:
-- Prefer missed facts with dates, names, organizations, titles, roles, publications, patents, awards, memberships, metrics, or quoted source support.
+- Prefer missed facts with dates, entity names, reporting periods, amounts, currencies, transaction identifiers, controls, exceptions, or quoted source support.
 - Do not repeat facts already listed.
 - Use structured_data.review_status = "candidate" and structured_data.source when possible.
 - Extract at most {max_facts} additional facts."""
@@ -321,7 +323,7 @@ def _guidance_for_doc_type(doc_type: str, document_name: str, lawyer_guidance: s
         return normalized_type, CUSTOM_DOC_TYPE_GUIDANCE
     return normalized_type, DOC_TYPE_GUIDANCE.get(
         normalized_type,
-        "Focus on objective facts, source-backed details, dates, names, numbers, and legal relevance. If the document is a resume/CV/profile, extract verifiable background entries as facts.",
+        "Focus on objective facts, source-backed details, dates, names, numbers, and audit relevance. If the document is a resume/CV/profile, extract verifiable background entries as facts.",
     )
 
 
@@ -588,8 +590,8 @@ class FactExtractionAgent:
                 content_scope=content_scope,
                 global_max_facts=max_facts,
                 doc_type_guidance=doc_type_guidance,
-                case_type=case_type,
-                lawyer_guidance=guidance or "No special lawyer guidance provided.",
+                case_type=audit_case_type_label(case_type),
+                lawyer_guidance=guidance or "No special auditor guidance provided.",
                 resume_inventory=resume_inventory if index == 1 else "",
                 content=chunk,
                 max_facts=per_chunk_limit,
@@ -622,8 +624,8 @@ class FactExtractionAgent:
                 content_scope="full document retry",
                 global_max_facts=max_facts,
                 doc_type_guidance=doc_type_guidance,
-                case_type=case_type,
-                lawyer_guidance=guidance or "No special lawyer guidance provided.",
+                case_type=audit_case_type_label(case_type),
+                lawyer_guidance=guidance or "No special auditor guidance provided.",
                 resume_inventory=resume_inventory,
                 content=self._smart_truncate(raw_text, max_content_chars),
                 max_facts=max_facts,
@@ -648,7 +650,7 @@ class FactExtractionAgent:
             gap_prompt = FACT_GAP_CHECK_PROMPT_TEMPLATE.format(
                 doc_type=doc_type_hint,
                 document_name=document_name or "Unknown",
-                case_type=case_type,
+                case_type=audit_case_type_label(case_type),
                 doc_type_guidance=doc_type_guidance,
                 coverage_json=json.dumps(coverage, ensure_ascii=False, indent=2),
                 existing_facts_json=json.dumps([

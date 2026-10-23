@@ -104,7 +104,7 @@ class LLMService:
     async def generate(
         self,
         prompt: str,
-        system: str = "You are a professional immigration lawyer assistant.",
+        system: str = "You are a professional audit assistant. Preserve evidence sources and flag unsupported conclusions for auditor review.",
         temperature: float = 0.3,
         max_tokens: int = 4096,
         org_settings: Optional[dict] = None,
@@ -225,16 +225,16 @@ class LLMService:
         glossary: Optional[dict] = None,
         org_settings: Optional[dict] = None,
     ) -> str:
-        """Legal-quality translation."""
+        """Audit-quality translation."""
         gloss_str = ""
         if glossary:
             gloss_str = "\n\nMandatory glossary (use these exact terms):\n" + \
                         "\n".join(f"  {k} → {v}" for k, v in glossary.items())
 
         system = (
-            "You are a professional legal translator specializing in US immigration documents. "
-            "Preserve all legal terminology precisely. Keep proper nouns unchanged. "
-            "Maintain formal legal writing tone."
+            "You are a professional translator specializing in audit and accounting documents. "
+            "Preserve audit and accounting terminology, amounts, currencies, dates, and evidence references precisely. Keep proper nouns unchanged. "
+            "Maintain a formal, objective audit writing tone."
         )
         prompt = (
             f"Translate the following from {source_lang} to {target_lang}."

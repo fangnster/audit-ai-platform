@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=_env_file, extra="ignore")
 
     # App
-    APP_NAME: str = "Immigration AI Platform"
+    APP_NAME: str = "Audit AI Platform"
     APP_VERSION: str = "1.0.0"
     APP_TIMEZONE: str = "Asia/Shanghai"
     DEBUG: bool = False

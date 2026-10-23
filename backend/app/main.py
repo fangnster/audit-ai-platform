@@ -31,6 +31,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=settings.APP_NAME,
+    description="AI-assisted audit evidence, fact review, and working-paper drafting. / AI 辅助审计证据整理、事实复核与底稿起草。",
     version=settings.APP_VERSION,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -82,10 +83,10 @@ async def request_logging_middleware(request: Request, call_next):
 API = "/api/v1"
 app.include_router(auth.router,        prefix=f"{API}/auth",        tags=["Auth"])
 app.include_router(orgs.router,        prefix=f"{API}/orgs",        tags=["Organizations"])
-app.include_router(cases.router,       prefix=f"{API}/cases",       tags=["Cases"])
+app.include_router(cases.router,       prefix=f"{API}/cases",       tags=["Audit Engagements"])
 app.include_router(documents.router,   prefix=f"{API}/documents",   tags=["Documents"])
 app.include_router(facts.router,       prefix=f"{API}/facts",       tags=["Facts"])
-app.include_router(drafts.router,      prefix=f"{API}/drafts",      tags=["Drafts"])
+app.include_router(drafts.router,      prefix=f"{API}/drafts",      tags=["Audit Drafts"])
 app.include_router(tasks.router,       prefix=f"{API}/tasks",       tags=["Tasks"])
 app.include_router(translation.router, prefix=f"{API}/translate",   tags=["Translation"])
 app.include_router(sessions.router,    prefix=f"{API}/sessions",    tags=["Sessions"])

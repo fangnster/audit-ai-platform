@@ -162,7 +162,7 @@ async def update_me(
     if body.firm_name is not None:
         firm_name = body.firm_name.strip()
         if not firm_name:
-            raise HTTPException(status_code=422, detail="公司/律所名称不能为空")
+            raise HTTPException(status_code=422, detail="公司/事务所名称不能为空")
         current_user.firm_name = firm_name
 
     if body.phone is not None:
